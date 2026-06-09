@@ -1,0 +1,115 @@
+-- CHUNK 4: lab orders (resulted)
+BEGIN;
+-- 5. Lab orders (resulted) for historical encounters
+INSERT INTO lab_orders (encounter_id, patient_id, ordering_doctor_id, raw_text, display_name, status, ordered_at, resulted_at)
+SELECT e.id, e.patient_id, e.doctor_id, v.lab_name, v.lab_name, 'resulted', (NOW() - INTERVAL '1 days' * v.days_ago + INTERVAL '5 hours'), (NOW() - INTERVAL '1 days' * v.days_ago + INTERVAL '7 hours') FROM (VALUES
+('ENC-20260525-V00401-V412','Lipid panel',217),
+('ENC-20260525-V00403-V412','KFT',350),
+('ENC-20260525-V00600-V412','Chest X-ray',44),
+('ENC-20260525-V00602-V412','Spirometry',138),
+('ENC-20260525-V00603-V412','Spirometry',305),
+('ENC-20260525-V00801-V412','Lipid panel',254),
+('ENC-20260525-V01200-V412','LFT',19),
+('ENC-20260525-V01201-V412','ECG',68),
+('ENC-20260525-V01205-V412','KFT',349),
+('ENC-20260525-V01502-V412','Urine ACR',230),
+('ENC-20260525-V01504-V412','HbA1c',330),
+('ENC-20260525-V01601-V412','Lipid panel',248),
+('ENC-20260525-V01800-V412','ECG',18),
+('ENC-20260525-V01802-V412','KFT',195),
+('ENC-20260525-V01803-V412','Lipid panel',209),
+('ENC-20260525-V01804-V412','Lipid panel',214),
+('ENC-20260525-V01805-V412','LFT',229),
+('ENC-20260525-V01807-V412','KFT',290),
+('ENC-20260525-V01902-V412','Free T4',322),
+('ENC-20260525-V02002-V412','Lipid panel',157),
+('ENC-20260525-V02003-V412','Lipid panel',245),
+('ENC-20260525-V02200-V412','Spirometry',66),
+('ENC-20260525-V02201-V412','Chest X-ray',114),
+('ENC-20260525-V02203-V412','Spirometry',166),
+('ENC-20260525-V02400-V412','KFT',53),
+('ENC-20260525-V02401-V412','Lipid panel',103),
+('ENC-20260525-V02601-V412','CBC',193),
+('ENC-20260525-V02603-V412','CBC',255),
+('ENC-20260525-V02604-V412','CBC',266),
+('ENC-20260525-V02704-V412','KFT',275),
+('ENC-20260525-V02705-V412','Lipid panel',346),
+('ENC-20260525-V02801-V412','NT-proBNP',88),
+('ENC-20260525-V02802-V412','TSH',94),
+('ENC-20260525-V02804-V412','TSH',188),
+('ENC-20260525-V02807-V412','ECG',350),
+('ENC-20260525-V03003-V412','Chest X-ray',166),
+('ENC-20260525-V03006-V412','Chest X-ray',286),
+('ENC-20260525-V03100-V412','Spirometry',126),
+('ENC-20260525-V03200-V412','TSH',16),
+('ENC-20260525-V03204-V412','KFT',183),
+('ENC-20260525-V03600-V412','Lipid panel',30),
+('ENC-20260525-V03601-V412','KFT',61),
+('ENC-20260525-V03800-V412','ESR',24),
+('ENC-20260525-V03802-V412','LFT',175),
+('ENC-20260525-V03900-V412','ECG',53),
+('ENC-20260525-V03901-V412','ECG',105),
+('ENC-20260525-V03902-V412','Lipid panel',252),
+('ENC-20260525-V03903-V412','LFT',267),
+('ENC-20260525-V04004-V412','KFT',213),
+('ENC-20260525-V04006-V412','KFT',321),
+('ENC-20260525-V04201-V412','Lipid panel',78),
+('ENC-20260525-V04203-V412','Lipid panel',154),
+('ENC-20260525-V04204-V412','KFT',160),
+('ENC-20260525-V04401-V412','Urine ACR',83),
+('ENC-20260525-V04402-V412','Urine ACR',138),
+('ENC-20260525-V04403-V412','KFT',185),
+('ENC-20260525-V04404-V412','Lipid panel',312),
+('ENC-20260525-V04405-V412','Lipid panel',336),
+('ENC-20260525-V04501-V412','KFT',53),
+('ENC-20260525-V04502-V412','LFT',155),
+('ENC-20260525-V04503-V412','LFT',222),
+('ENC-20260525-V04505-V412','LFT',341),
+('ENC-20260525-V04507-V412','Lipid panel',358),
+('ENC-20260525-V04900-V412','TSH',96),
+('ENC-20260525-V04901-V412','Free T4',142),
+('ENC-20260525-V04902-V412','TSH',182),
+('ENC-20260525-V04904-V412','Free T4',310),
+('ENC-20260525-V05001-V412','Chest X-ray',116),
+('ENC-20260525-V05002-V412','Spirometry',202),
+('ENC-20260525-V05004-V412','Chest X-ray',323),
+('ENC-20260525-V05403-V412','Lipid panel',256),
+('ENC-20260525-V05901-V412','LFT',207),
+('ENC-20260525-V05902-V412','Lipid panel',291),
+('ENC-20260525-V05903-V412','KFT',353),
+('ENC-20260525-V06200-V412','CBC',208),
+('ENC-20260525-V06203-V412','CBC',359),
+('ENC-20260525-V06800-V412','KFT',57),
+('ENC-20260525-V06802-V412','KFT',152),
+('ENC-20260525-V07201-V412','KFT',260)) AS v(enc_no,lab_name,days_ago) JOIN encounters e ON e.encounter_number = v.enc_no;
+COMMIT;
+-- CHUNK 5: today encounters + lab orders
+BEGIN;
+-- 6. New today encounters for V (16 new — 8 waiting, 4 paused, 4 ready)
+INSERT INTO encounters (encounter_number,patient_id,doctor_id,encounter_date,status,started_at,chief_complaint_chips,chief_complaint_text,vitals,paused_reason,pending_diagnostic_test) VALUES
+('ENC-20260525-VT00-V412','22027b9d-049c-4237-9b9e-99a26bd57075','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','ready_to_resume'::encounter_status,NOW() - INTERVAL '244 minutes',ARRAY['Routine review']::text[],'Routine follow-up, BP + DM review','{"bp":"132/80","hr":84,"rr":17,"temp_c":36.7,"spo2":96}'::jsonb,NULL,NULL),
+('ENC-20260525-VT01-V412','d538730d-aa62-47cc-ae77-197284b3a5d0','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '31 minutes',ARRAY['Cough']::text[],'Cough x 1 week, no fever','{"bp":"141/88","hr":78,"rr":14,"temp_c":36.7,"spo2":96}'::jsonb,NULL,NULL),
+('ENC-20260525-VT02-V412','bd92918f-47c0-4f61-aeb4-bf37b29cd32d','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','paused_diagnostics'::encounter_status,NOW() - INTERVAL '284 minutes',ARRAY['Headache']::text[],'Headache, recurrent','{"bp":"128/77","hr":89,"rr":20,"temp_c":36.6,"spo2":97}'::jsonb,'lab_panel: routine review','CBC + KFT panel'),
+('ENC-20260525-VT03-V412','1187d7c0-210f-46ec-99ba-94eac9875a07','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '138 minutes',ARRAY['Back pain']::text[],'Back pain, mechanical','{"bp":"123/79","hr":78,"rr":18,"temp_c":36.8,"spo2":99}'::jsonb,NULL,NULL),
+('ENC-20260525-VT04-V412','8dd12917-2bd6-4659-8c6b-e4fcfe6ec3be','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','ready_to_resume'::encounter_status,NOW() - INTERVAL '34 minutes',ARRAY['Atypical chest']::text[],'Chest discomfort, atypical','{"bp":"130/79","hr":73,"rr":19,"temp_c":37.1,"spo2":99}'::jsonb,NULL,NULL),
+('ENC-20260525-VT05-V412','5d408330-ede0-4c0a-8637-7decf7a4f292','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','ready_to_resume'::encounter_status,NOW() - INTERVAL '129 minutes',ARRAY['Thyroid review']::text[],'Thyroid follow-up','{"bp":"141/80","hr":82,"rr":18,"temp_c":36.8,"spo2":96}'::jsonb,NULL,NULL),
+('ENC-20260525-VT06-V412','f5b01768-84f2-4bae-a8ae-906ec7ad1eaf','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','paused_diagnostics'::encounter_status,NOW() - INTERVAL '72 minutes',ARRAY['DM review']::text[],'Diabetes review','{"bp":"124/82","hr":92,"rr":19,"temp_c":37.2,"spo2":96}'::jsonb,'lab_panel: routine review','CBC + KFT panel'),
+('ENC-20260525-VT07-V412','540f734b-0cda-4ab5-8b80-49fbf6ac7dfb','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','paused_diagnostics'::encounter_status,NOW() - INTERVAL '154 minutes',ARRAY['Ankle injury']::text[],'Ankle sprain, post-fall','{"bp":"135/79","hr":79,"rr":16,"temp_c":36.6,"spo2":96}'::jsonb,'lab_panel: routine review','CBC + KFT panel'),
+('ENC-20260525-VT08-V412','c43f8f6d-2ed1-46f2-a753-2843b35954fd','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','paused_diagnostics'::encounter_status,NOW() - INTERVAL '220 minutes',ARRAY['Rhinitis']::text[],'Allergic rhinitis flare','{"bp":"139/89","hr":84,"rr":19,"temp_c":36.7,"spo2":99}'::jsonb,'lab_panel: routine review','CBC + KFT panel'),
+('ENC-20260525-VT09-V412','afce6eb6-96b3-431a-ae6c-2cc8f6327a6d','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '172 minutes',ARRAY['Annual']::text[],'Annual health check','{"bp":"136/77","hr":79,"rr":16,"temp_c":37.2,"spo2":97}'::jsonb,NULL,NULL),
+('ENC-20260525-VT10-V412','84ed4b79-ede8-44ad-80de-9d221c2abbaf','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','ready_to_resume'::encounter_status,NOW() - INTERVAL '176 minutes',ARRAY['Insomnia']::text[],'Insomnia, 3 weeks','{"bp":"137/76","hr":89,"rr":15,"temp_c":36.7,"spo2":97}'::jsonb,NULL,NULL),
+('ENC-20260525-VT11-V412','f24bc475-7729-4d54-887d-186d2cfcb5b8','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '234 minutes',ARRAY['Dyspepsia']::text[],'Dyspepsia, post-meal','{"bp":"121/79","hr":79,"rr":19,"temp_c":36.5,"spo2":99}'::jsonb,NULL,NULL),
+('ENC-20260525-VT12-V412','2e556486-3115-43fc-bae1-d2a7dbf1e305','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '295 minutes',ARRAY['Migraine']::text[],'Migraine, 2 episodes this month','{"bp":"137/78","hr":86,"rr":17,"temp_c":36.8,"spo2":99}'::jsonb,NULL,NULL),
+('ENC-20260525-VT13-V412','0195511f-bcc3-4d7e-9edd-ae9ce9452105','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '115 minutes',ARRAY['Conjunctivitis']::text[],'Eye redness + discharge','{"bp":"140/79","hr":85,"rr":15,"temp_c":36.9,"spo2":97}'::jsonb,NULL,NULL),
+('ENC-20260525-VT14-V412','10d3a712-9612-4fac-954d-e53404c25017','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '268 minutes',ARRAY['Rash']::text[],'Skin rash, 5 days','{"bp":"128/88","hr":87,"rr":14,"temp_c":37.3,"spo2":96}'::jsonb,NULL,NULL),
+('ENC-20260525-VT15-V412','c13925d8-d5f9-47a8-b736-074396616912','2a03f6df-6023-4250-92ad-bd8770196f08',DATE '2026-05-25','waiting_for_doctor'::encounter_status,NOW() - INTERVAL '229 minutes',ARRAY['Knee pain']::text[],'Knee pain, OA','{"bp":"122/80","hr":80,"rr":18,"temp_c":36.9,"spo2":99}'::jsonb,NULL,NULL);
+
+-- 7. Fresh CBC+KFT lab orders for the 4 new paused today-encounters
+INSERT INTO lab_orders (encounter_id, patient_id, ordering_doctor_id, raw_text, display_name, status, ordered_at)
+SELECT e.id, e.patient_id, e.doctor_id, 'CBC + KFT (panel review)', 'CBC + KFT (panel review)', 'pending', NOW() - INTERVAL '15 minutes' FROM encounters e WHERE e.encounter_number IN ('ENC-20260525-VT02-V412','ENC-20260525-VT06-V412','ENC-20260525-VT07-V412','ENC-20260525-VT08-V412');
+COMMIT;
+SELECT 'patients_with_comorbidities' AS m, COUNT(DISTINCT patient_id)::text AS v FROM patient_comorbidities
+ UNION ALL SELECT 'patients_with_allergies', COUNT(*)::text FROM patients WHERE known_allergies IS NOT NULL AND known_allergies <> ''
+ UNION ALL SELECT 'total_completed_encs', COUNT(*)::text FROM encounters WHERE status='completed'
+ UNION ALL SELECT 'V_today_'||status::text, COUNT(*)::text FROM encounters WHERE encounter_date = CURRENT_DATE AND doctor_id = '2a03f6df-6023-4250-92ad-bd8770196f08' GROUP BY status
+ UNION ALL SELECT 'avg_history_per_patient', ROUND(AVG(c)::numeric,2)::text FROM (SELECT COUNT(*) c FROM encounters WHERE status='completed' GROUP BY patient_id) x;

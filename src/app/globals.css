@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Even Hospital surface defaults.
+ * Backgrounds use brand white; text uses brand navy.
+ * Component-level overrides will live alongside their components.
+ */
+:root {
+  --background: #FCFCFC;
+  --foreground: #002054;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
