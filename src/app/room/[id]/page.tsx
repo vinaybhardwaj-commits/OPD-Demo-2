@@ -89,7 +89,11 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
             phase: {enc.current_phase}
           </span>
           <div className="ml-auto">
-            <RoomControls encounterId={enc.id} clinicalStatus={enc.clinical_status} />
+            <RoomControls
+              encounterId={enc.id}
+              clinicalStatus={enc.clinical_status}
+              openSessionSeq={enc.sessions.find((s) => !s.ended_at && s.status === 'recording')?.seq ?? null}
+            />
           </div>
         </div>
         {(vitalChips.length > 0 || enc.known_allergies) && (
