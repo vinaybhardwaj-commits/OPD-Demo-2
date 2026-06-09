@@ -20,6 +20,7 @@ import { useRouter } from 'next/navigation';
 import type { ClinicalStatus } from '@/lib/lifecycle';
 import { useMediaRecorder } from '@/lib/use-media-recorder';
 import { putChunk, getChunksForEncounter, purgeEncounter, markEncounterSubmitted } from '@/lib/chunk-store';
+import { useRoomCapture } from '@/components/room/RoomCapture';
 
 type Props = {
   encounterId: string;
@@ -35,6 +36,10 @@ function storeKey(encounterId: string, seq: number): string {
 
 export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Props) {
   const router = useRouter();
+  // P1.3: mirror chunks + recording state onto the RoomCapture bus so the
+  // live transcript rail (LiveTranscript) can stream to Deepgram. Additive —
+  // the P1.2 record/durability loop below is unchanged.
+  const capture = useRoomCapture();
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [chunks, setChunks] = React.useState(0);
@@ -51,12 +56,17 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
       const key = storeKey(encounterId, openSessionSeq);
       if (memRef.current.key !== key) memRef.current = { key, chunks: [] };
       memRef.current.chunks.push(blob);
+      capture?.emitChunk(blob);
       setChunks((c) => c + 1);
       void putChunk(key, idx, blob, blob.type || 'audio/webm').catch(() => {
         /* intentional: IDB best-effort; mem failsafe holds the audio */
       });
     },
   });
+
+  React.useEffect(() => {
+    capture?.setRecording(rec.state === 'recording' || rec.state === 'paused');
+  }, [capture, rec.state]);
 
   React.useEffect(() => {
     if (rec.state !== 'recording' && rec.state !== 'paused') return;

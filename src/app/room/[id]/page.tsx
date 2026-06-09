@@ -5,7 +5,7 @@
  * ships the chrome + lifecycle choreography:
  *   top bar (patient identity + vitals + lifecycle controls) ·
  *   left = structured-capture placeholder (classic editor linked) ·
- *   center = live transcript rail placeholder (P1.3) ·
+ *   center = LIVE transcript rail (P1.3 — Deepgram, hybrid blocks) ·
  *   right = sessions timeline.
  * The classic /dashboard/encounters/[id] editor remains the typed-capture
  * surface until the dual-input merge (P1.3+). Lossless.
@@ -15,6 +15,8 @@ import { notFound, redirect } from 'next/navigation';
 import { getCurrentDoctor } from '@/lib/auth';
 import { loadRoomEncounter } from '@/lib/room';
 import { RoomControls } from '@/components/room/RoomControls';
+import { RoomCaptureProvider } from '@/components/room/RoomCapture';
+import { LiveTranscript } from '@/components/room/LiveTranscript';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,6 +64,7 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
   if (v.weight_kg) vitalChips.push(['Wt', `${v.weight_kg}kg`]);
 
   return (
+    <RoomCaptureProvider>
     <main className="min-h-screen bg-even-white-cream">
       {/* Top bar */}
       <div className="border-b border-even-ink-200 bg-white px-4 py-3">
@@ -132,16 +135,8 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
           </Link>
         </section>
 
-        {/* Live transcript rail (P1.3) */}
-        <section className="rounded-xl border border-dashed border-even-ink-300 bg-even-ink-50/40 p-4">
-          <h2 className="text-xs font-bold uppercase tracking-wide text-even-ink-600">
-            Live transcript
-          </h2>
-          <p className="mt-2 text-xs text-even-ink-400">
-            Speaker-tagged live transcript lands here (Deepgram · Sarvam · relay — P1.3/P1.4). The
-            live speaker pill (always-on diarization) follows with voiceprints.
-          </p>
-        </section>
+        {/* Live transcript rail — P1.3 Deepgram live (hybrid blocks) */}
+        <LiveTranscript encounterId={enc.id} />
 
         {/* Sessions timeline */}
         <section className="rounded-xl border border-even-ink-200 bg-white p-4">
@@ -174,5 +169,6 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
         </section>
       </div>
     </main>
+    </RoomCaptureProvider>
   );
 }
