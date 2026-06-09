@@ -1760,6 +1760,117 @@ export const MIGRATIONS: Migration[] = [
         ON llm_traces(doctor_email, started_at DESC);
     `,
   },
+  {
+    version: 40,
+    name: 'v7_0_lifecycle_foundation',
+    sql: `
+      -- v7.0 / OPD-Demo-2 P0.3 — Lifecycle foundation.
+      -- Two-track encounter status (clinical lane + processing pipeline),
+      -- multi-session recording (encounter_sessions = the unit that gets
+      -- stitched), disposition phases on plans, CDMSS accept/ignore audit,
+      -- and session-aware LLM traces.
+      -- Legacy encounters.status stays canonical for pre-redesign flows
+      -- (lossless); new surfaces read clinical_status/processing_status.
+
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS clinical_status TEXT;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS processing_status TEXT NOT NULL DEFAULT 'idle';
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS current_phase TEXT NOT NULL DEFAULT 'primary';
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS field_provenance JSONB NOT NULL DEFAULT '{}'::jsonb;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS note_json JSONB;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS note_json_edited JSONB;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS cdmss_json JSONB;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS tagged_transcript JSONB;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS detected_language TEXT;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS primary_speaker_clinician_id UUID REFERENCES doctors(id);
+
+      DO $do$ BEGIN
+        ALTER TABLE encounters ADD CONSTRAINT chk_enc_clinical_status CHECK (
+          clinical_status IS NULL OR clinical_status IN (
+            'ready','in_room','out_for_workup','back_ready','processing',
+            'ready_for_review','finalizing','complete','cancelled'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+      DO $do$ BEGIN
+        ALTER TABLE encounters ADD CONSTRAINT chk_enc_processing_status CHECK (
+          processing_status IN ('idle','transcribing','generating','ready','errored'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+      DO $do$ BEGIN
+        ALTER TABLE encounters ADD CONSTRAINT chk_enc_current_phase CHECK (
+          current_phase IN ('primary','followup','finalizing'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+      -- Backfill the new clinical lane from the legacy status enum.
+      UPDATE encounters SET clinical_status = CASE status::text
+        WHEN 'registered'         THEN 'ready'
+        WHEN 'at_triage'          THEN 'ready'
+        WHEN 'waiting_for_doctor' THEN 'ready'
+        WHEN 'active'             THEN 'in_room'
+        WHEN 'paused_diagnostics' THEN 'out_for_workup'
+        WHEN 'ready_to_resume'    THEN 'back_ready'
+        WHEN 'completed'          THEN 'complete'
+        ELSE 'ready' END
+      WHERE clinical_status IS NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_enc_clinical_status
+        ON encounters(clinical_status, encounter_date);
+
+      -- One row per recording segment; the unit that gets stitched.
+      CREATE TABLE IF NOT EXISTS encounter_sessions (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        encounter_id      UUID NOT NULL REFERENCES encounters(id) ON DELETE CASCADE,
+        seq               INT NOT NULL,
+        phase             TEXT NOT NULL DEFAULT 'primary'
+                          CHECK (phase IN ('primary','followup','final_disposition')),
+        audio_object_key  TEXT,
+        audio_bytes       BIGINT,
+        duration_seconds  NUMERIC,
+        transcript_raw    TEXT,
+        transcript_clean  TEXT,
+        tagged_transcript JSONB,
+        detected_language TEXT,
+        status            TEXT NOT NULL DEFAULT 'recording'
+                          CHECK (status IN ('recording','uploaded','transcribed','errored')),
+        started_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ended_at          TIMESTAMPTZ,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (encounter_id, seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_es_encounter ON encounter_sessions(encounter_id, seq);
+
+      -- Dispositions become phase-aware: initial pauses, final completes.
+      ALTER TABLE encounter_plans ADD COLUMN IF NOT EXISTS disposition_phase TEXT NOT NULL DEFAULT 'final';
+      DO $do$ BEGIN
+        ALTER TABLE encounter_plans ADD CONSTRAINT chk_ep_disposition_phase CHECK (
+          disposition_phase IN ('initial','intermediate','final'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+      UPDATE encounter_plans SET disposition_phase = 'initial'
+        WHERE kind IN ('diagnostics','imaging') AND disposition_phase = 'final';
+
+      -- CDMSS accept/ignore audit (per-doctor analytics). item_group rather
+      -- than "group" (reserved word).
+      CREATE TABLE IF NOT EXISTS encounter_cdmss_items (
+        id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        encounter_id   UUID NOT NULL REFERENCES encounters(id) ON DELETE CASCADE,
+        session_id     UUID REFERENCES encounter_sessions(id) ON DELETE SET NULL,
+        item_group     TEXT NOT NULL CHECK (item_group IN ('what_to_do','what_else','probability')),
+        payload        JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status         TEXT NOT NULL DEFAULT 'proposed'
+                       CHECK (status IN ('proposed','accepted','ignored')),
+        linked_plan_id UUID REFERENCES encounter_plans(id) ON DELETE SET NULL,
+        acted_by       UUID REFERENCES doctors(id),
+        acted_at       TIMESTAMPTZ,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_eci_encounter ON encounter_cdmss_items(encounter_id, item_group);
+      CREATE INDEX IF NOT EXISTS idx_eci_status ON encounter_cdmss_items(status) WHERE status <> 'proposed';
+
+      -- Traces become session-aware (per-session draft vs stitch runs).
+      ALTER TABLE llm_traces ADD COLUMN IF NOT EXISTS session_id UUID REFERENCES encounter_sessions(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_llm_traces_session
+        ON llm_traces(session_id, started_at DESC) WHERE session_id IS NOT NULL;
+    `,
+  },
 ];
 
 /**
