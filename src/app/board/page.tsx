@@ -55,6 +55,20 @@ const PRIMARY_ACTION: Record<string, string | null> = {
   cancelled: null,
 };
 
+function hrefFor(card: BoardCard): string {
+  // Capture-side states go to the Room; review/done stay on the classic editor.
+  switch (card.clinical_status) {
+    case 'ready':
+    case 'in_room':
+    case 'out_for_workup':
+    case 'back_ready':
+    case 'processing':
+      return `/room/${card.id}`;
+    default:
+      return `/dashboard/encounters/${card.id}`;
+  }
+}
+
 function fmtTime(iso: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -103,14 +117,14 @@ function Card({ card }: { card: BoardCard }) {
         <span className="text-[10px] text-even-ink-400">{fmtTime(card.started_at)}</span>
         {action ? (
           <Link
-            href={`/dashboard/encounters/${card.id}`}
+            href={hrefFor(card)}
             className="rounded-md bg-even-blue-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-even-blue-700"
           >
             {action}
           </Link>
         ) : (
           <Link
-            href={`/dashboard/encounters/${card.id}`}
+            href={hrefFor(card)}
             className="text-[11px] font-medium text-even-blue-600 hover:underline"
           >
             View
