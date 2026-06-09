@@ -101,9 +101,8 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
     let blobs: Blob[] = memRef.current.key === key ? memRef.current.chunks : [];
     if (blobs.length === 0) {
       try {
-        const rows = await getChunksForEncounter(key);
-        blobs = rows.map((r) => r.blob);
-        if (rows[0]?.mime_type) mimeRef.current = rows[0].mime_type;
+        blobs = await getChunksForEncounter(key);
+        if (blobs[0]?.type) mimeRef.current = blobs[0].type;
       } catch {
         /* intentional: fall through to empty check */
       }
