@@ -15,10 +15,10 @@
  *   - Read-only when the encounter is completed.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DrugTypeahead } from './DrugTypeahead';
+import { DrugTypeahead, type ParsedSig } from './DrugTypeahead';
 import { DrugRow, lineFromDrug, type PrescriptionLine } from './DrugRow';
 import { DdiBanner } from './DdiBanner';
-import { findSmartDefaults } from '@/lib/drug-defaults';
+import { findSmartDefaults, FREQUENCY_OPTIONS, TIMING_OPTIONS, type Frequency, type Timing } from '@/lib/drug-defaults';
 import type { DrugSearchResult } from '@/lib/types';
 
 /**
@@ -127,6 +127,56 @@ export function PrescriptionCompose({
     [addPickConfirmed],
   );
 
+  // RX.1 — AI-resolver pick: formulary match gets smart defaults OVERRIDDEN
+  // by whatever sig the doctor actually typed; null drug = add-as-written
+  // (non-formulary, amber-flagged — pharmacy sources or substitutes).
+  const onResolvedPick = useCallback(
+    (drug: DrugSearchResult | null, parsed: ParsedSig, resolvedName: string) => {
+      const freq = parsed.frequency && (FREQUENCY_OPTIONS as string[]).includes(parsed.frequency)
+        ? (parsed.frequency as Frequency) : null;
+      const timing = parsed.timing && (TIMING_OPTIONS as string[]).includes(parsed.timing)
+        ? (parsed.timing as Timing) : null;
+      if (drug) {
+        if (drug.schedule_dc === 'X') {
+          setPendingSchedX(drug);
+          return;
+        }
+        setLines((cur) => {
+          if (cur.some((l) => l.item_code === drug.item_code)) return cur;
+          const defaults = findSmartDefaults(drug.generic_name);
+          const line = lineFromDrug(drug, defaults);
+          return [...cur, {
+            ...line,
+            frequency: freq ?? line.frequency,
+            duration_days: parsed.duration_days ?? line.duration_days,
+            timing: timing ?? line.timing,
+          }];
+        });
+        if (drug.lasa_alternates && drug.lasa_alternates.length > 0) {
+          setLasaAlternates((cur) => ({ ...cur, [drug.item_code]: drug.lasa_alternates }));
+        }
+        return;
+      }
+      // Off-formulary add-as-written (RX.1 lock: allowed, flagged).
+      const name = resolvedName.trim() || 'Unlisted drug';
+      setLines((cur) => [...cur, {
+        item_code: `NF-${Date.now().toString(36)}`,
+        brand_name: name,
+        generic_name: name,
+        dosage_form: 'AS WRITTEN',
+        strength: parsed.strength,
+        schedule_dc: 'H',
+        is_high_risk: false,
+        frequency: freq,
+        duration_days: parsed.duration_days,
+        timing,
+        instructions: '',
+        non_formulary: true,
+      }]);
+    },
+    [],
+  );
+
   const confirmSchedX = useCallback(() => {
     if (pendingSchedX) addPickConfirmed(pendingSchedX);
     setPendingSchedX(null);
@@ -201,7 +251,7 @@ export function PrescriptionCompose({
         <div className="mb-4">
           {adderOpen ? (
             <div>
-              <DrugTypeahead autoFocus clearOnSelect onSelect={onTypeaheadPick} />
+              <DrugTypeahead autoFocus clearOnSelect onSelect={onTypeaheadPick} onResolvedPick={onResolvedPick} />
               <button
                 type="button"
                 onClick={() => setAdderOpen(false)}

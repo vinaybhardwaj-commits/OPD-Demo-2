@@ -31,8 +31,27 @@ import {
 } from 'react';
 import type { DrugSearchResult, DrugSearchResponse } from '@/lib/types';
 
+export type ParsedSig = {
+  strength: string | null;
+  frequency: string | null;
+  duration_days: number | null;
+  timing: string | null;
+};
+
+type ResolveResponse = {
+  ok: boolean;
+  resolved_name?: string;
+  is_drug?: boolean;
+  parsed?: ParsedSig;
+  matches?: DrugSearchResult[];
+  off_formulary?: boolean;
+};
+
 export type DrugTypeaheadProps = {
   onSelect: (drug: DrugSearchResult) => void;
+  /** RX.1: AI-resolver pick. drug=null means add-as-written (non-formulary).
+   *  When omitted, resolver picks fall back to onSelect (formulary drugs only). */
+  onResolvedPick?: (drug: DrugSearchResult | null, parsed: ParsedSig, resolvedName: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
   clearOnSelect?: boolean;
@@ -42,6 +61,7 @@ export type DrugTypeaheadProps = {
 
 export function DrugTypeahead({
   onSelect,
+  onResolvedPick,
   placeholder = 'Type a brand or generic name…',
   autoFocus = false,
   clearOnSelect = true,
@@ -97,6 +117,55 @@ export function DrugTypeahead({
     };
   }, [query, limit]);
 
+  // ---- RX.1 smart resolver — fires when the typeahead misses, or when the
+  // text looks like a full order ("brufen 400 tds 5d"). llama3.1:8b parses
+  // the sig + normalizes the name; trigram re-matches against the formulary.
+  const [resolve, setResolve] = useState<ResolveResponse | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const resolveSeqRef = useRef(0);
+  const sigLike = /\s\d|\b(od|bd|tds|qid|sos|hs|prn|days?|wks?|stat)\b/i;
+  useEffect(() => {
+    setResolve(null);
+    const q = query.trim();
+    if (loading || q.length < 3) return;
+    const shouldFire = results.length === 0 || (q.split(/\s+/).length >= 2 && sigLike.test(q));
+    if (!shouldFire) return;
+    const seq = ++resolveSeqRef.current;
+    const t = setTimeout(async () => {
+      setResolving(true);
+      try {
+        const res = await fetch('/api/drugs/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q }),
+        });
+        const j = (await res.json()) as ResolveResponse;
+        if (seq === resolveSeqRef.current && j.ok) setResolve(j);
+      } catch {
+        /* intentional: resolver is an enhancement — typeahead still works */
+      } finally {
+        if (seq === resolveSeqRef.current) setResolving(false);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, loading, query]);
+
+  const emptySig: ParsedSig = { strength: null, frequency: null, duration_days: null, timing: null };
+  const pickResolved = (drug: DrugSearchResult | null) => {
+    const parsed = resolve?.parsed ?? emptySig;
+    const name = resolve?.resolved_name ?? query.trim();
+    if (onResolvedPick) onResolvedPick(drug, parsed, name);
+    else if (drug) onSelect(drug);
+    if (clearOnSelect) {
+      setQuery('');
+      setResults([]);
+    }
+    setResolve(null);
+    close();
+    inputRef.current?.focus();
+  };
+
   const close = useCallback(() => {
     setOpen(false);
     setActiveIdx(0);
@@ -137,7 +206,7 @@ export function DrugTypeahead({
     }
   }
 
-  const showPanel = open && (loading || results.length > 0 || query.trim().length >= 2);
+  const showPanel = open && (loading || results.length > 0 || query.trim().length >= 2 || resolving || !!resolve);
 
   return (
     <div className="relative">
@@ -207,6 +276,57 @@ export function DrugTypeahead({
               {results.length} results · {latencyMs} ms
             </div>
           )}
+
+          {/* RX.1 — smart resolver section */}
+          {resolving && (
+            <div className="flex items-center gap-2 border-t border-violet-100 bg-violet-50/40 px-4 py-2.5 text-xs text-violet-700">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-300 border-t-violet-600" />
+              ✨ Matching against the formulary…
+            </div>
+          )}
+          {!resolving && resolve && (resolve.matches?.length || resolve.off_formulary) ? (
+            <div className="border-t border-violet-100 bg-violet-50/40">
+              <div className="px-4 pt-2 text-[10px] font-bold uppercase tracking-wide text-violet-600">
+                ✨ Smart match
+                {(resolve.parsed?.frequency || resolve.parsed?.duration_days || resolve.parsed?.strength) ? (
+                  <span className="ml-2 font-normal normal-case text-even-ink-500">
+                    sig: {[resolve.parsed?.strength, resolve.parsed?.frequency,
+                          resolve.parsed?.duration_days ? `${resolve.parsed.duration_days}d` : null,
+                          resolve.parsed?.timing]
+                      .filter(Boolean).join(' · ')}
+                  </span>
+                ) : null}
+              </div>
+              {(resolve.matches ?? []).slice(0, 5).map((r) => (
+                <button
+                  key={`ai-${r.item_code}`}
+                  type="button"
+                  className="flex w-full items-baseline gap-2 px-4 py-2 text-left text-sm hover:bg-violet-100/60"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickResolved(r);
+                  }}
+                >
+                  <span className="font-semibold text-even-navy">{r.brand_name}</span>
+                  {r.strength ? <span className="text-xs text-even-ink-500">{r.strength}</span> : null}
+                  <span className="truncate text-xs text-even-ink-500">{r.generic_name} · {r.dosage_form}</span>
+                </button>
+              ))}
+              {resolve.off_formulary && onResolvedPick ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 border-t border-amber-100 bg-amber-50/60 px-4 py-2.5 text-left text-xs text-amber-800 hover:bg-amber-100/70"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickResolved(null);
+                  }}
+                >
+                  <span className="font-semibold">＋ Add “{resolve.resolved_name}” as written</span>
+                  <span className="text-amber-600">non-formulary — pharmacy will source or substitute</span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
     </div>

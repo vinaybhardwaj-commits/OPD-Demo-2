@@ -40,6 +40,8 @@ export type PrescriptionLine = {
   duration_days: number | null;
   timing: Timing | null;
   instructions: string;
+  /** RX.1: added as written via the AI resolver — not stocked in the EHRC formulary. */
+  non_formulary?: boolean;
 };
 
 export type DrugRowProps = {
@@ -102,6 +104,14 @@ export function DrugRow({ line, onChange, onRemove, readOnly }: DrugRowProps) {
             )}
             <ScheduleChip schedule={line.schedule_dc} />
             {line.is_high_risk && <HighRiskBadge />}
+            {line.non_formulary && (
+              <span
+                className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-200"
+                title="Added as written — not in the EHRC formulary; pharmacy will source or substitute"
+              >
+                non-formulary
+              </span>
+            )}
           </div>
           <div className="mt-0.5 truncate text-xs text-even-ink-600">
             {line.generic_name}
