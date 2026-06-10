@@ -10,6 +10,7 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getCurrentDoctor } from '@/lib/auth';
+import { pool } from '@/lib/db';
 import { getBoard, type BoardCard } from '@/lib/board';
 import { LANE_LABELS, LANE_ORDER, type BoardLane } from '@/lib/lifecycle';
 
@@ -139,6 +140,22 @@ export default async function BoardPage() {
   const session = await getCurrentDoctor();
   if (!session) redirect('/auth/login');
 
+  // P2.2: surface the "doctor not enrolled" hint (lock) — recordings still
+  // process, but diarized speakers stay unlabeled until enrollment.
+  let voiceprintMissing = false;
+  try {
+    const { rows } = await pool.query<{ enrolled: boolean }>(
+      `SELECT (vp.doctor_id IS NOT NULL) AS enrolled
+         FROM doctors d
+         LEFT JOIN voice_print vp ON vp.doctor_id = d.id
+        WHERE lower(d.email) = lower($1) LIMIT 1`,
+      [session.email],
+    );
+    voiceprintMissing = rows.length > 0 && !rows[0].enrolled;
+  } catch {
+    /* intentional: hint only — tolerate any deploy→migrate window */
+  }
+
   const lanes = await getBoard();
 
   return (
@@ -147,6 +164,15 @@ export default async function BoardPage() {
         <div className="mb-4 flex items-baseline justify-between">
           <h1 className="text-lg font-bold text-even-navy-800">Clinic Board</h1>
           <div className="flex items-center gap-3 text-xs text-even-ink-500">
+            {voiceprintMissing ? (
+              <Link
+                href="/enroll/voice"
+                className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 hover:underline"
+                title="Doctor not enrolled — processed transcripts label speakers anonymously (Speaker 1/2) until you enroll"
+              >
+                🎙 voiceprint not set up — speakers unlabeled
+              </Link>
+            ) : null}
             <Link href="/dashboard" className="text-even-blue-600 hover:underline">
               Classic queue
             </Link>

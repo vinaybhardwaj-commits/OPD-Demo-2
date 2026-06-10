@@ -1941,6 +1941,32 @@ export const MIGRATIONS: Migration[] = [
         WHERE status = 'uploaded' AND transcribed_at IS NULL;
     `,
   },
+  {
+    version: 43,
+    name: 'v7_3_session_diarize',
+    sql: `
+      -- v7.3 / OPD-Demo-2 P2.2 — per-session diarization + speaker tagging.
+      -- speakers_json = pyannote speakers (idx/label/type/clinician match/
+      -- confidence/embedding handled in code, embedding NOT stored here);
+      -- tagged_transcript = reconciled speaker-tagged English turns
+      -- (TaggedEntry[]); diarize soft-fails per session (diarize_error set,
+      -- diarized_at stays NULL so the hourly sweep retries — P2.2 lock).
+      -- encounters.tagged_transcript = all sessions' turns concatenated in
+      -- seq order (the P3 stitch reads per-session rows; this is the
+      -- whole-encounter convenience view).
+
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS speakers_json JSONB;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS tagged_transcript JSONB;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS diarized_at TIMESTAMPTZ;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS diarize_error TEXT;
+
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS tagged_transcript JSONB;
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_undiarized
+        ON encounter_sessions (encounter_id)
+        WHERE transcribed_at IS NOT NULL AND diarized_at IS NULL;
+    `,
+  },
 ];
 
 /**

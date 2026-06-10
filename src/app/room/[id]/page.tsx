@@ -180,6 +180,29 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
                   <div className="mt-1 text-[11px] text-even-ink-400">
                     {fmtTime(s.started_at)} → {s.ended_at ? fmtTime(s.ended_at) : 'open'}
                   </div>
+                  {/* P2.1/P2.2 pipeline chips: transcript → speakers */}
+                  {(s.transcribed_at || s.transcribe_error || s.diarized_at || s.diarize_error) && (
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                      {s.transcribed_at ? (
+                        <span className="rounded-full bg-emerald-50 px-1.5 text-[10px] text-emerald-700">
+                          transcript ✓{s.detected_language ? ` · ${s.detected_language}` : ''}
+                        </span>
+                      ) : s.transcribe_error ? (
+                        <span className="rounded-full bg-red-50 px-1.5 text-[10px] text-red-700" title={s.transcribe_error}>
+                          transcribe ✗
+                        </span>
+                      ) : null}
+                      {s.diarized_at ? (
+                        <span className="rounded-full bg-emerald-50 px-1.5 text-[10px] text-emerald-700" title={s.tagged_turns ? `${s.tagged_turns} speaker-tagged turn(s)` : 'Diarized — no timed text entries to tag'}>
+                          🗣 {s.speaker_count ?? 0} speaker{(s.speaker_count ?? 0) === 1 ? '' : 's'}{s.tagged_turns ? ` · ${s.tagged_turns} turns` : ''}
+                        </span>
+                      ) : s.diarize_error ? (
+                        <span className="rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-700" title={`${s.diarize_error} — transcript kept; the hourly sweep retries`}>
+                          diarize retry…
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

@@ -16,6 +16,12 @@ export type RoomSession = {
   ended_at: string | null;
   duration_seconds: number | null;
   detected_language: string | null;
+  transcribed_at: string | null;
+  transcribe_error: string | null;
+  speaker_count: number | null;
+  tagged_turns: number | null;
+  diarized_at: string | null;
+  diarize_error: string | null;
 };
 
 export type RoomEncounter = {
@@ -54,7 +60,11 @@ export async function loadRoomEncounter(id: string): Promise<RoomEncounter | nul
 
   const { rows: sessions } = await pool.query(
     `SELECT id, seq, phase, status, started_at::text AS started_at,
-            ended_at::text AS ended_at, duration_seconds, detected_language
+            ended_at::text AS ended_at, duration_seconds, detected_language,
+            transcribed_at::text AS transcribed_at, transcribe_error,
+            jsonb_array_length(speakers_json) AS speaker_count,
+            jsonb_array_length(tagged_transcript) AS tagged_turns,
+            diarized_at::text AS diarized_at, diarize_error
      FROM encounter_sessions
      WHERE encounter_id = $1
      ORDER BY seq`,

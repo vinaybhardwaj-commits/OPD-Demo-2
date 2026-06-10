@@ -23,6 +23,7 @@ import { useDeepgramLive, type LiveUtterance } from '@/lib/use-deepgram-live';
 import { useSarvamRolling } from '@/lib/use-sarvam-rolling';
 import { useSarvamStreaming } from '@/lib/use-sarvam-streaming';
 import { useUtteranceCleanup } from '@/lib/use-utterance-cleanup';
+import { useSpeakerIdentify } from '@/lib/use-speaker-identify';
 import { useRoomCapture } from '@/components/room/RoomCapture';
 import { detectIOS, detectDesktopSafari } from '@/lib/platform';
 
@@ -33,7 +34,7 @@ type Block = { id: number; segs: Seg[] };
 
 type Props = {
   encounterId: string;
-  /** P1.6: signed-in doctor's voiceprint enrollment state (live speaker ID lands with P2 diarize). */
+  /** P1.6/P2.2: signed-in doctor's voiceprint enrollment state (drives the live speaker-ID pill). */
   speakerEnrolled?: boolean;
 };
 
@@ -117,16 +118,23 @@ export function LiveTranscript({ encounterId, speakerEnrolled }: Props) {
     relayUrl: RELAY_URL,
   });
 
+  // ---- P2.2 live speaker ID — the pill goes real ---------------------------
+  // Every 8s a recent audio window is embedded (Mac Mini /enroll) and cosine-
+  // compared to the doctor's voice_print centroid. Only runs when enrolled.
+  const spk = useSpeakerIdentify({ enabled: recording && speakerEnrolled === true });
+
   // Pipe recorder chunks to the chunk-fed engines (relay taps the raw stream).
   const dgSend = dg.sendChunk;
   const svSend = svRoll.sendChunk;
+  const spkSend = spk.sendChunk;
   React.useEffect(() => {
     if (!capture) return;
     return capture.subscribe((chunk: Blob) => {
       dgSend(chunk);
       svSend(chunk);
+      spkSend(chunk);
     });
-  }, [capture, dgSend, svSend]);
+  }, [capture, dgSend, svSend, spkSend]);
 
   // Auto-scroll the displayed trace.
   React.useEffect(() => {
@@ -175,14 +183,32 @@ export function LiveTranscript({ encounterId, speakerEnrolled }: Props) {
             {language}
           </span>
         ) : null}
-        {/* P1.6 speaker pill placeholder — live per-utterance speaker ID lands with P2 diarize */}
+        {/* P2.2 speaker pill — REAL: live windows vs the doctor's voiceprint */}
         {speakerEnrolled === true ? (
-          <span className="rounded-full bg-even-ink-50 px-2 py-0.5 text-[10px] text-even-ink-500" title="Voiceprint enrolled — live speaker labels arrive with the P2 pipeline">
-            🎙 voiceprint ✓ · ID in P2
-          </span>
+          recording ? (
+            spk.current ? (
+              spk.current.isClinician ? (
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800" title={`Live voice match ${(spk.current.confidence * 100).toFixed(0)}% (best ${spk.confidence != null ? (spk.confidence * 100).toFixed(0) + '%' : '—'})`}>
+                  🎙 {spk.name ?? 'You'} ✓ {(spk.current.confidence * 100).toFixed(0)}%
+                </span>
+              ) : (
+                <span className="rounded-full bg-even-blue-50 px-2 py-0.5 text-[10px] text-even-blue-700" title={spk.identified ? 'Another voice has the floor — you were identified earlier in this session' : 'Current window doesn\u2019t match your voiceprint'}>
+                  🎙 other voice{spk.identified ? ' · you ✓' : ''}
+                </span>
+              )
+            ) : (
+              <span className="rounded-full bg-even-ink-50 px-2 py-0.5 text-[10px] text-even-ink-500" title="Listening for your voice (first window ~8s)">
+                🎙 identifying…
+              </span>
+            )
+          ) : (
+            <span className="rounded-full bg-even-ink-50 px-2 py-0.5 text-[10px] text-even-ink-500" title="Voiceprint enrolled — live speaker ID runs while recording; processed notes name you">
+              🎙 voiceprint ✓
+            </span>
+          )
         ) : speakerEnrolled === false ? (
-          <a href="/enroll/voice" className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 hover:underline" title="Enroll your voice so recordings can label you">
-            🎙 not enrolled — set up
+          <a href="/enroll/voice" className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 hover:underline" title="Doctor not enrolled — recordings still process, but speakers stay unlabeled (Speaker 1/2). Enroll to be named.">
+            🎙 not enrolled — speakers unlabeled · set up
           </a>
         ) : null}
         {/* Display selector — all engines run in parallel; this only switches
@@ -275,7 +301,7 @@ function Empty({ recording }: { recording: boolean }) {
     <p className="text-xs text-even-ink-400">
       {recording
         ? 'Listening…'
-        : 'Start recording to see the live transcript. All engines run in parallel — switch the view above between sessions. Speaker labels arrive with voiceprints (P1.6).'}
+        : 'Start recording to see the live transcript. All engines run in parallel — switch the view above between sessions. Speaker-tagged transcripts appear in Sessions after processing.'}
     </p>
   );
 }
