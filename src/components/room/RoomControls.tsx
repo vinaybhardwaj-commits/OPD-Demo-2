@@ -14,6 +14,13 @@
  *
  * One continuous recording per session (mic soft-pause excludes audio
  * without fragmenting the blob — ETA's B4/iOS lesson).
+ *
+ * P1.5 — initial-disposition desync poll: submitting a gating plan
+ * (diagnostics/imaging) in the classic editor flips ONLY the legacy
+ * status to paused_diagnostics. While in_room, this component polls
+ * GET .../lifecycle every 5s; on seeing that desync it automatically
+ * runs the same stop→upload→pause_for_workup flow as the button —
+ * audio still uploads BEFORE the transition.
  */
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
@@ -41,6 +48,8 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
   // the P1.2 record/durability loop below is unchanged.
   const capture = useRoomCapture();
   const [busy, setBusy] = React.useState<string | null>(null);
+  const busyRef = React.useRef<string | null>(null);
+  React.useEffect(() => { busyRef.current = busy; }, [busy]);
   const [error, setError] = React.useState<string | null>(null);
   const [chunks, setChunks] = React.useState(0);
   const [elapsed, setElapsed] = React.useState(0);
@@ -70,6 +79,42 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
   React.useEffect(() => {
     capture?.setRecording(rec.state === 'recording' || rec.state === 'paused');
   }, [capture, rec.state]);
+
+  // P1.5: initial-disposition desync poll (5s while in_room). The classic
+  // editor's plans/submit flips legacy status only; we see it and run the
+  // full upload-first pause flow automatically.
+  React.useEffect(() => {
+    if (clinicalStatus !== 'in_room') return;
+    let stopped = false;
+    const t = setInterval(async () => {
+      if (stopped || busyRef.current !== null) return;
+      try {
+        const r = await fetch(`/api/encounters/${encounterId}/lifecycle`, { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          ok: boolean;
+          clinical_status?: string;
+          legacy_status?: string;
+        };
+        if (
+          j.ok &&
+          j.clinical_status === 'in_room' &&
+          j.legacy_status === 'paused_diagnostics' &&
+          !stopped &&
+          busyRef.current === null
+        ) {
+          await fire('pause_for_workup');
+        }
+      } catch {
+        /* intentional: poll is best-effort; next tick retries */
+      }
+    }, 5_000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clinicalStatus, encounterId]);
 
   React.useEffect(() => {
     if (rec.state !== 'recording' && rec.state !== 'paused') return;
@@ -101,14 +146,17 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
     await rec.start();
   }
 
-  /** Stop recorder, consolidate chunks, upload to R2, finalize session. */
+  /** Stop recorder, consolidate chunks, upload to R2, finalize session.
+   *  Retry-able (P1.5): if a previous upload failed the recorder is already
+   *  idle but the chunks are still in mem/IDB — pick them up and upload
+   *  instead of skipping straight to the transition (which would close the
+   *  session without its audio). */
   async function stopAndUpload(): Promise<boolean> {
     if (openSessionSeq == null) return true;
     const wasRecording = rec.state === 'recording' || rec.state === 'paused';
-    if (!wasRecording) return true; // nothing recorded this session — transition only
 
     setBusy('uploading');
-    await rec.stop();
+    if (wasRecording) await rec.stop();
 
     const key = storeKey(encounterId, openSessionSeq);
     let blobs: Blob[] = memRef.current.key === key ? memRef.current.chunks : [];
@@ -123,9 +171,15 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
       mimeRef.current = blobs[0]?.type || 'audio/webm';
     }
     if (blobs.length === 0) {
-      setError('no audio captured');
+      if (wasRecording) {
+        // Recording ran but produced zero chunks (mic/driver issue) — hold
+        // the transition so the visit isn't silently closed without audio.
+        setError('no audio captured');
+        setBusy(null);
+        return false;
+      }
       setBusy(null);
-      return false;
+      return true; // nothing recorded this session — transition only
     }
 
     const blob = new Blob(blobs, { type: mimeRef.current });
@@ -262,7 +316,7 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
           disabled={busy !== null}
           className={`${btn} bg-emerald-600 text-white hover:bg-emerald-700`}
         >
-          {busy === 'mark_back_ready' ? 'Marking…' : 'Results back (demo)'}
+          {busy === 'mark_back_ready' ? 'Marking…' : 'Mark back (manual)'}
         </button>
       )}
 

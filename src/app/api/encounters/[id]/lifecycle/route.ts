@@ -14,6 +14,13 @@
  *   cancel            any non-terminal -> cancelled
  *
  * processing_status stays 'idle' in P1 — the background pipeline lands in P2.
+ *
+ * GET (P1.5) — both lifecycle tracks + the legacy status, for the Room's
+ * desync poll: the classic editor's plans/submit flips ONLY the legacy
+ * status to 'paused_diagnostics'; the Room watches for that while
+ * clinical_status is still 'in_room', then runs stop→upload→pause_for_workup
+ * client-side so the audio uploads BEFORE the transition (upload-first
+ * invariant).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { pool } from '@/lib/db';
@@ -45,6 +52,29 @@ const LEGACY: Partial<Record<ClinicalStatus, string>> = {
   processing: 'active',
   complete: 'completed',
 };
+
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+
+  const { id } = await ctx.params;
+  const { rows } = await pool.query<{
+    clinical_status: string;
+    processing_status: string;
+    current_phase: string;
+    legacy_status: string;
+  }>(
+    `SELECT clinical_status, processing_status, current_phase, status::text AS legacy_status
+       FROM encounters
+      WHERE id = $1
+      LIMIT 1`,
+    [id],
+  );
+  if (rows.length === 0) {
+    return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true, ...rows[0] });
+}
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();

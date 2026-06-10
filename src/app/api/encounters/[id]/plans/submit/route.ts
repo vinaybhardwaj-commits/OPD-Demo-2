@@ -19,6 +19,7 @@ import { pool } from '@/lib/db';
 import { getCurrentDoctor } from '@/lib/auth';
 import { submitPlans } from '@/lib/encounter-plans';
 import { applyPlansDownstream } from '@/lib/plan-downstream';
+import { statusAfterPlan } from '@/lib/plan-schemas';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -107,6 +108,31 @@ export async function POST(
           WHERE id = $1`,
         [id],
       );
+
+      // P1.5: if the encounter is mid-Room-visit (clinical track in_room),
+      // this submit IS the initial (or, on a follow-up loop, intermediate)
+      // disposition — stamp the gating plans' disposition_phase. The clinical
+      // transition itself is NOT made here: the Room polls GET .../lifecycle,
+      // sees legacy=paused_diagnostics while clinical=in_room, and runs
+      // stop→upload→pause_for_workup so audio uploads before the transition.
+      const gatingIds = result.submittedPlans
+        .filter((p) => statusAfterPlan(p.kind, p.payload) === 'paused_diagnostics')
+        .map((p) => p.id);
+      if (gatingIds.length > 0) {
+        await pool.query(
+          `UPDATE encounter_plans ep
+              SET disposition_phase = CASE
+                    WHEN e.current_phase = 'followup' THEN 'intermediate'
+                    ELSE 'initial'
+                  END,
+                  updated_at = NOW()
+             FROM encounters e
+            WHERE e.id = ep.encounter_id
+              AND ep.id = ANY($1::uuid[])
+              AND e.clinical_status = 'in_room'`,
+          [gatingIds],
+        );
+      }
     }
   } catch (e) {
     return NextResponse.json(

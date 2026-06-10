@@ -198,6 +198,19 @@ export async function POST(
        RETURNING room_id`,
       [order.encounter_id],
     );
+
+    // 3b. P1.5 — same FIRST-result rule on the two-track lifecycle: a
+    //     patient out for workup comes back ready on the first posted
+    //     result. Same tx, same idempotent conditional-UPDATE style;
+    //     out_for_workup→back_ready is a valid CLINICAL_TRANSITIONS edge.
+    //     (Replaces the Room's demo-only button as the REAL hook; the
+    //     button stays as a manual override.)
+    await client.query(
+      `UPDATE encounters
+       SET clinical_status = 'back_ready', updated_at = NOW()
+       WHERE id = $1 AND clinical_status = 'out_for_workup'`,
+      [order.encounter_id],
+    );
     if (rowCount && rowCount > 0) {
       encounterFlipped = true;
       const { rows: roomRows } = await client.query<{ room_id: string | null }>(
