@@ -121,6 +121,41 @@ export async function buildChronology(encounterId: string): Promise<ChronologyRe
     }
   } catch { /* intentional: best-effort */ }
 
+  // Unlinked results (lab_orders is a v3 compat VIEW — results entered
+  // outside the order linkage, incl. legacy paths, land with
+  // lab_order_id NULL). Pick up the patient's unlinked results inside the
+  // encounter window so the chronology never silently drops a value.
+  try {
+    const { rows } = await pool.query<{
+      display_name: string;
+      value_numeric: string | null;
+      value_text: string | null;
+      unit: string | null;
+      reference_range: string | null;
+      is_critical: boolean | null;
+      entered_at: string;
+    }>(
+      `SELECT r.display_name, r.value_numeric::text AS value_numeric, r.value_text,
+              r.unit, r.reference_range, r.is_critical, r.entered_at::text AS entered_at
+         FROM lab_results r
+        WHERE r.lab_order_id IS NULL
+          AND r.patient_id = (SELECT patient_id FROM encounters WHERE id = $1)
+          AND r.entered_at >= COALESCE(
+                (SELECT MIN(started_at) FROM encounter_sessions WHERE encounter_id = $1),
+                (SELECT created_at FROM encounters WHERE id = $1))
+        ORDER BY r.entered_at ASC`,
+      [encounterId],
+    );
+    for (const r of rows) {
+      results++;
+      const val = r.value_numeric ?? r.value_text ?? '—';
+      lines.push({
+        ts: r.entered_at,
+        line: `[${fmtT(r.entered_at)}] RESULT: ${r.display_name} = ${val}${r.unit ? ' ' + r.unit : ''}${r.reference_range ? ` (ref ${r.reference_range})` : ''}${r.is_critical ? ' ⚠ CRITICAL' : ''}`,
+      });
+    }
+  } catch { /* intentional: best-effort */ }
+
   lines.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return { text: lines.map((l) => l.line).join('\n'), orders, results, awaited };
 }
