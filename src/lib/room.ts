@@ -43,12 +43,16 @@ export type RoomEncounter = {
   sex: string | null;
   known_allergies: string | null;
   sessions: RoomSession[];
+  cdmss_json: unknown;
+  cdmss_error: string | null;
+  cdmss_items: Array<{ id: string; item_group: string; payload: Record<string, unknown>; status: string }>;
 };
 
 export async function loadRoomEncounter(id: string): Promise<RoomEncounter | null> {
   const { rows } = await pool.query(
     `SELECT e.id, e.encounter_number, e.clinical_status, e.processing_status,
             e.current_phase, e.started_at::text AS started_at,
+            e.cdmss_json, e.cdmss_error,
             COALESCE(e.chief_complaint_text, array_to_string(e.chief_complaint_chips, ', ')) AS chief_complaint,
             e.intake_visit_reason, e.vitals,
             p.id AS patient_id, p.name AS patient_name, p.mrn AS patient_mrn,
@@ -74,5 +78,17 @@ export async function loadRoomEncounter(id: string): Promise<RoomEncounter | nul
     [id],
   );
 
-  return { ...(rows[0] as Omit<RoomEncounter, 'sessions'>), sessions: sessions as RoomSession[] };
+  const { rows: cdmssItems } = await pool.query(
+    `SELECT id, item_group, payload, status
+       FROM encounter_cdmss_items
+      WHERE encounter_id = $1
+      ORDER BY created_at ASC`,
+    [id],
+  );
+
+  return {
+    ...(rows[0] as Omit<RoomEncounter, 'sessions' | 'cdmss_items'>),
+    sessions: sessions as RoomSession[],
+    cdmss_items: cdmssItems as RoomEncounter['cdmss_items'],
+  };
 }

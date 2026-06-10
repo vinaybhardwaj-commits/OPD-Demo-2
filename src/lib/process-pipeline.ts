@@ -30,7 +30,15 @@
  *   refreshable (P2.3 locks). llm_traces rows per generation (session-tied).
  *   Note-gen failure → 'errored' + sweep retry; empty transcript → stamped
  *   done, no retry loop.
- * P2.4 CDS.
+ * P2.4 stage: KB-grounded CDS over the encounter draft note (ADVISORY).
+ *   OpdNote seed → kbRetrieve (HyDE + pgvector) → cited 6-group draft
+ *   (qwen2.5:14b) → citation critique (llama3.1:8b) → revise →
+ *   encounters.cdmss_json + encounter_cdmss_items proposed rows
+ *   (what_to_do/what_else accept-ignore; advisory groups display-only).
+ *   SOFT-FAIL (P2.4 lock): cdmss_error + sweep retry; never blocks 'ready'.
+ *   When the pipeline lands 'ready' and clinical_status='processing'
+ *   (end-visit path) the card flips to ready_for_review (design §4;
+ *   legacy status untouched — no legacy analogue, lossless).
  *
  * Concurrency: atomic claim on encounters.processing_status with a 30-min
  * stale-claim takeover (the reaper rule) — two simultaneous calls can't
@@ -59,6 +67,7 @@ import {
   type OpdNote,
 } from './note-generation';
 import { openTrace } from './llm-trace/log';
+import { runCdmssPipeline, type OpdCdmss } from './cdmss-pipeline';
 
 const STALE_CLAIM_MINUTES = 30;
 
@@ -73,6 +82,8 @@ export type ProcessOutcome = {
   diarize_failed: number;
   notes_done: number;
   notes_failed: number;
+  cdmss_done: boolean;
+  cdmss_failed: boolean;
   skipped?: string;
   error?: string;
 };
@@ -97,6 +108,8 @@ export async function processEncounter(
     diarize_failed: 0,
     notes_done: 0,
     notes_failed: 0,
+    cdmss_done: false,
+    cdmss_failed: false,
   };
 
   // Record the live engines' language detection if we got one and the
@@ -221,9 +234,12 @@ export async function processEncounter(
   const ng = await generateNotes(encounterId, opts.force === true);
   if (ng.failed > 0 && !lastError) lastError = ng.lastError;
 
+  // ---- P2.4 — KB-grounded CDS (advisory; soft-fail) ------------------------
+  const cd = await generateCdmss(encounterId, opts.force === true);
+
   // Final status. 'ready' = all current pipeline stages done. Transcription
-  // or note-gen failures → 'errored' (the note IS the product; diarize stays
-  // a soft enrichment) — the sweep retries both.
+  // or note-gen failures → 'errored' (the note IS the product; diarize and
+  // CDS stay soft enrichments) — the sweep retries all of them.
   const anyFailed = failed > 0 || ng.failed > 0;
   const finalStatus = anyFailed ? 'errored' : 'ready';
   await pool.query(
@@ -234,6 +250,17 @@ export async function processEncounter(
       WHERE id = $1`,
     [encounterId, finalStatus, anyFailed ? (lastError ?? 'unknown').slice(0, 300) : null],
   );
+
+  // P2.4 — flip the board card to the Review queue (design §4): only on the
+  // end-visit path (clinical 'processing'), only when the pipeline is clean.
+  if (finalStatus === 'ready') {
+    await pool.query(
+      `UPDATE encounters
+          SET clinical_status = 'ready_for_review', updated_at = NOW()
+        WHERE id = $1 AND clinical_status = 'processing'`,
+      [encounterId],
+    ).catch(() => { /* intentional: flip is choreography, not data integrity */ });
+  }
 
   return {
     ...base,
@@ -246,8 +273,117 @@ export async function processEncounter(
     diarize_failed: dz.failed,
     notes_done: ng.done,
     notes_failed: ng.failed,
+    cdmss_done: cd.done,
+    cdmss_failed: cd.failed,
     error: lastError ?? undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// P2.4 — CDS/CDMSS stage (advisory, soft-fail)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the KB-grounded CDS pipeline over encounters.note_json, persist
+ * cdmss_json, and (re)propose encounter_cdmss_items rows for the two
+ * actionable groups. Re-runs replace only status='proposed' rows —
+ * accepted/ignored decisions are never clobbered. Never throws.
+ */
+async function generateCdmss(
+  encounterId: string,
+  force: boolean,
+): Promise<{ done: boolean; failed: boolean }> {
+  try {
+    const { rows } = await pool.query<{
+      note_json: unknown;
+      cdmss_generated_at: string | null;
+      patient_id: string;
+      doctor_email: string | null;
+    }>(
+      `SELECT e.note_json, e.cdmss_generated_at::text AS cdmss_generated_at,
+              e.patient_id, d.email AS doctor_email
+         FROM encounters e LEFT JOIN doctors d ON d.id = e.doctor_id
+        WHERE e.id = $1`,
+      [encounterId],
+    );
+    if (rows.length === 0 || !rows[0].note_json) return { done: false, failed: false };
+    if (rows[0].cdmss_generated_at && !force) return { done: false, failed: false };
+    const enc = rows[0];
+
+    const trace = await openTrace({
+      surface: 'cdmss',
+      encounter_id: encounterId,
+      patient_id: enc.patient_id,
+      doctor_email: enc.doctor_email,
+      request_input: { scope: 'encounter', force },
+    });
+    const r = await runCdmssPipeline(enc.note_json as OpdNote, {
+      onEvent: (stage, msg, ms) => trace.event(stage, msg, ms),
+    });
+    if (!r.ok) {
+      await pool.query(
+        `UPDATE encounters SET cdmss_error = $2, updated_at = NOW() WHERE id = $1`,
+        [encounterId, r.error.slice(0, 300)],
+      ).catch(() => { /* intentional: bookkeeping best-effort */ });
+      await trace.finalise({ status: 'errored', error_message: r.error.slice(0, 300) });
+      return { done: false, failed: true };
+    }
+
+    await pool.query(
+      `UPDATE encounters
+          SET cdmss_json = $2::jsonb, cdmss_generated_at = NOW(), cdmss_error = NULL,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [encounterId, JSON.stringify(r.cdmss)],
+    );
+
+    // (Re)propose the actionable item rows. Keep accepted/ignored history.
+    try {
+      await pool.query(
+        `DELETE FROM encounter_cdmss_items WHERE encounter_id = $1 AND status = 'proposed'`,
+        [encounterId],
+      );
+      const c: OpdCdmss = r.cdmss;
+      for (const it of c.what_to_do) {
+        await pool.query(
+          `INSERT INTO encounter_cdmss_items (encounter_id, item_group, payload)
+           VALUES ($1, 'what_to_do', $2::jsonb)`,
+          [encounterId, JSON.stringify(it)],
+        );
+      }
+      for (const it of c.what_else_to_ask) {
+        await pool.query(
+          `INSERT INTO encounter_cdmss_items (encounter_id, item_group, payload)
+           VALUES ($1, 'what_else', $2::jsonb)`,
+          [encounterId, JSON.stringify(it)],
+        );
+      }
+    } catch {
+      /* intentional: cdmss_json is canonical; item rows are the action layer */
+    }
+
+    trace.event('persist', `CDS persisted (${r.cdmss.what_to_do.length} to-do, ${r.cdmss.what_else_to_ask.length} to-ask)`, undefined, true);
+    await trace.finalise({
+      status: 'completed',
+      result_summary: {
+        what_to_do: r.cdmss.what_to_do.length,
+        what_else_to_ask: r.cdmss.what_else_to_ask.length,
+        differentials: r.cdmss.differentials_to_consider.length,
+        sources: r.cdmss.sources.length,
+        used_critique: r.cdmss.retrieval_meta?.used_critique,
+        used_revise: r.cdmss.retrieval_meta?.used_revise,
+      },
+      model_calls: r.models,
+    });
+    return { done: true, failed: false };
+  } catch (e) {
+    const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+    await pool.query(
+      `UPDATE encounters SET cdmss_error = $2 WHERE id = $1`,
+      [encounterId, msg],
+    ).catch(() => { /* intentional: bookkeeping best-effort */ });
+    return { done: false, failed: true };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -655,7 +791,8 @@ export async function findUnprocessedEncounters(limit: number): Promise<string[]
       WHERE s.audio_object_key IS NOT NULL
         AND ((s.status = 'uploaded' AND s.transcribed_at IS NULL)
              OR (s.transcribed_at IS NOT NULL AND s.diarized_at IS NULL)
-             OR (s.transcribed_at IS NOT NULL AND s.note_generated_at IS NULL))
+             OR (s.transcribed_at IS NOT NULL AND s.note_generated_at IS NULL)
+             OR (e.note_json IS NOT NULL AND e.cdmss_generated_at IS NULL))
         AND (e.processing_status NOT IN ('transcribing', 'generating')
              OR e.processing_started_at < NOW() - make_interval(mins => ${STALE_CLAIM_MINUTES}))
       LIMIT $1`,

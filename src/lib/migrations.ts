@@ -1988,6 +1988,19 @@ export const MIGRATIONS: Migration[] = [
         WHERE transcribed_at IS NOT NULL AND note_generated_at IS NULL;
     `,
   },
+  {
+    version: 45,
+    name: 'v7_5_cdms_bookkeeping',
+    sql: `
+      -- v7.5 / OPD-Demo-2 P2.4 — CDS/CDMSS stage bookkeeping.
+      -- cdmss_json itself landed in migration 40. CDS is ADVISORY: failure
+      -- sets cdmss_error with cdmss_generated_at NULL (hourly sweep retries)
+      -- and never blocks processing_status 'ready' (P2.4 lock).
+
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS cdmss_generated_at TIMESTAMPTZ;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS cdmss_error TEXT;
+    `,
+  },
 ];
 
 /**

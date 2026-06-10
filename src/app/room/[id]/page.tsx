@@ -18,6 +18,7 @@ import { loadRoomEncounter } from '@/lib/room';
 import { RoomControls } from '@/components/room/RoomControls';
 import { RoomCaptureProvider } from '@/components/room/RoomCapture';
 import { LiveTranscript } from '@/components/room/LiveTranscript';
+import { CdmssCard, type CdmssPayload } from '@/components/room/CdmssCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -222,6 +223,23 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
           )}
         </section>
       </div>
+
+      {/* P2.4 — violet CDS card (design §12.2; full Review Queue surface = P4) */}
+      {enc.cdmss_json ? (
+        <div className="mx-auto max-w-[1500px] px-4 pb-6">
+          <CdmssCard
+            encounterId={enc.id}
+            cdmss={enc.cdmss_json as CdmssPayload}
+            items={enc.cdmss_items}
+          />
+        </div>
+      ) : enc.cdmss_error ? (
+        <div className="mx-auto max-w-[1500px] px-4 pb-6">
+          <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800" title={enc.cdmss_error}>
+            AI suggestions unavailable for now ({enc.cdmss_error.slice(0, 60)}…) — the hourly sweep retries. Your disposition is unaffected.
+          </p>
+        </div>
+      ) : null}
     </main>
     </RoomCaptureProvider>
   );
