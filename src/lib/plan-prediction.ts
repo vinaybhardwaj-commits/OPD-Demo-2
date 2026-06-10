@@ -626,7 +626,10 @@ export async function predictPlans(
       qwenJson<RawQwenResponse>(
         PREDICTION_SYSTEM_PROMPT,
         buildUserMessage(snapshot),
-        { timeoutMs: 12_000, signal: opts.signal },
+        // B4b: 12s assumed a dedicated warm box — the shared Mini routinely
+        // needs 20-40s for qwen2.5:14b. The block streams progress, so the
+        // wait is visible, and the tunnel ceiling is ~100s.
+        { timeoutMs: 60_000, signal: opts.signal },
       ),
     );
     const total_ms = Date.now() - t0;
