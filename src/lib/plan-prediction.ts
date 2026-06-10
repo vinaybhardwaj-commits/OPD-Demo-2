@@ -171,7 +171,11 @@ export async function buildSnapshot(
       raw_text: string | null;
     }>(
       `SELECT
-         COALESCE(test_name, 'unspecified') AS test_name,
+         -- B4: fresh-run schema has display_name/raw_text, never test_name
+         -- (the legacy column only existed in the long-lived v6.1 DB) —
+         -- this hard-500'd predict-plans, soft-failing SuggestedPlans to
+         -- invisible.
+         COALESCE(display_name, raw_text, 'unspecified') AS test_name,
          status::text AS status,
          raw_text
        FROM lab_orders
