@@ -113,12 +113,26 @@ export async function POST(req: NextRequest) {
     .replace(/\s+/g, ' ')
     .trim();
   const terms = [rawNameOnly, q, parsed?.generic_name ?? '', parsed?.brand_hint ?? '', parsed?.corrected_spelling ?? ''];
-  let matches: unknown[] = [];
+  type Match = { brand_name: string; strength: string | null; score: number };
+  let matches: Match[] = [];
   try {
-    matches = await trigram(terms, 8);
+    matches = (await trigram(terms, 12)) as Match[];
   } catch {
     matches = [];
   }
+  // Re-rank: the brand the doctor actually TYPED beats alphabetical
+  // similarity-ties (dolo → Dolo, not Calpol), and a strength match
+  // ("650") floats the right SKU to the top.
+  const brandTyped = (parsed?.brand_hint || rawNameOnly).toLowerCase();
+  const strengthDigits = strength ? strength.replace(/[^0-9.]/g, '') : null;
+  const boost = (m: Match): number => {
+    let b = Number(m.score) || 0;
+    const mb = m.brand_name.toLowerCase();
+    if (brandTyped && (mb.startsWith(brandTyped) || mb.split(/\s/)[0] === brandTyped.split(/\s/)[0])) b += 0.5;
+    if (strengthDigits && m.strength && m.strength.replace(/[^0-9.]/g, '') === strengthDigits) b += 0.3;
+    return b;
+  };
+  matches = matches.sort((a, b) => boost(b) - boost(a)).slice(0, 8);
 
   const isDrug = parsed ? parsed.is_drug !== false : true;
   const resolvedName =
