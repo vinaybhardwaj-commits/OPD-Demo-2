@@ -36,6 +36,11 @@ export const dynamic = 'force-dynamic';
 type Row = EncounterEditable & {
   patient_id: string;
 
+  // P4.1 — review surface fields
+  clinical_status: string | null;
+  cdmss_json: unknown | null;
+  cdmss_error: string | null;
+
   // v4.1.1 — pause-aware doctor-active clock (see migration v34 + lib/encounter-timer.ts)
   active_ms_accumulated: number | string | null;
   active_since: string | null;
