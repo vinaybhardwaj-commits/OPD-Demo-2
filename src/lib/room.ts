@@ -22,6 +22,8 @@ export type RoomSession = {
   tagged_turns: number | null;
   diarized_at: string | null;
   diarize_error: string | null;
+  note_generated_at: string | null;
+  note_error: string | null;
 };
 
 export type RoomEncounter = {
@@ -64,7 +66,8 @@ export async function loadRoomEncounter(id: string): Promise<RoomEncounter | nul
             transcribed_at::text AS transcribed_at, transcribe_error,
             jsonb_array_length(speakers_json) AS speaker_count,
             jsonb_array_length(tagged_transcript) AS tagged_turns,
-            diarized_at::text AS diarized_at, diarize_error
+            diarized_at::text AS diarized_at, diarize_error,
+            note_generated_at::text AS note_generated_at, note_error
      FROM encounter_sessions
      WHERE encounter_id = $1
      ORDER BY seq`,

@@ -20,7 +20,17 @@
  *   capture day one, strict 0.82 gate. Diarize SOFT-FAILS per session
  *   (diarize_error, diarized_at stays NULL → hourly sweep retries) and
  *   NEVER flips processing_status to errored.
- * P2.3 note-gen; P2.4 CDS.
+ * P2.3 stage: per-session draft notes + whole-encounter note + Section fill.
+ *   tagged (else plain) transcript → qwen2.5:14b → OPD note schema →
+ *   encounter_sessions.note_json (the P3 stitch input); encounters.note_json
+ *   = session 1's draft (N=1) or a provisional regen from the full tagged
+ *   transcript (N>1; true hybrid stitch = P3). Field-provenance merge fills
+ *   ONLY untouched Sections (chief_complaint_text/exam_findings/
+ *   assessment_text): 'typed'/'ai_then_edited' inviolable; 'ai_generated'
+ *   refreshable (P2.3 locks). llm_traces rows per generation (session-tied).
+ *   Note-gen failure → 'errored' + sweep retry; empty transcript → stamped
+ *   done, no retry loop.
+ * P2.4 CDS.
  *
  * Concurrency: atomic claim on encounters.processing_status with a 30-min
  * stale-claim takeover (the reaper rule) — two simultaneous calls can't
@@ -41,6 +51,14 @@ import {
 } from './diarize';
 import { transcribeDiarized } from './transcribe';
 import { capturePassiveSample } from './voice-samples';
+import {
+  generateOpdNote,
+  transcriptForNote,
+  noteHasContent,
+  NOTE_MODEL,
+  type OpdNote,
+} from './note-generation';
+import { openTrace } from './llm-trace/log';
 
 const STALE_CLAIM_MINUTES = 30;
 
@@ -53,6 +71,8 @@ export type ProcessOutcome = {
   sessions_failed: number;
   sessions_diarized: number;
   diarize_failed: number;
+  notes_done: number;
+  notes_failed: number;
   skipped?: string;
   error?: string;
 };
@@ -75,6 +95,8 @@ export async function processEncounter(
     sessions_failed: 0,
     sessions_diarized: 0,
     diarize_failed: 0,
+    notes_done: 0,
+    notes_failed: 0,
   };
 
   // Record the live engines' language detection if we got one and the
@@ -191,29 +213,259 @@ export async function processEncounter(
   // problems never mark the encounter errored (P2.2 lock).
   const dz = await diarizeSessions(encounterId, opts.force === true);
 
-  // Final status. 'ready' = all current pipeline stages done (P2.3 inserts
-  // 'generating' between). Failures → 'errored' with the last error kept.
-  const finalStatus = failed > 0 ? 'errored' : 'ready';
+  // ---- P2.3 — draft notes ('generating' stage) -----------------------------
+  await pool.query(
+    `UPDATE encounters SET processing_status = 'generating', updated_at = NOW() WHERE id = $1`,
+    [encounterId],
+  ).catch(() => { /* intentional: stage marker is cosmetic; claim still holds */ });
+  const ng = await generateNotes(encounterId, opts.force === true);
+  if (ng.failed > 0 && !lastError) lastError = ng.lastError;
+
+  // Final status. 'ready' = all current pipeline stages done. Transcription
+  // or note-gen failures → 'errored' (the note IS the product; diarize stays
+  // a soft enrichment) — the sweep retries both.
+  const anyFailed = failed > 0 || ng.failed > 0;
+  const finalStatus = anyFailed ? 'errored' : 'ready';
   await pool.query(
     `UPDATE encounters
         SET processing_status = $2,
             processing_error = $3,
             updated_at = NOW()
       WHERE id = $1`,
-    [encounterId, finalStatus, failed > 0 ? (lastError ?? 'unknown').slice(0, 300) : null],
+    [encounterId, finalStatus, anyFailed ? (lastError ?? 'unknown').slice(0, 300) : null],
   );
 
   return {
     ...base,
-    ok: failed === 0,
+    ok: !anyFailed,
     claimed: true,
     processing_status: finalStatus,
     sessions_done: done,
     sessions_failed: failed,
     sessions_diarized: dz.done,
     diarize_failed: dz.failed,
+    notes_done: ng.done,
+    notes_failed: ng.failed,
     error: lastError ?? undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// P2.3 — note generation stage
+// ---------------------------------------------------------------------------
+
+type NoteSessionRow = {
+  id: string;
+  seq: number;
+  tagged_transcript: unknown;
+  transcript_en: string | null;
+};
+
+/** §10.1 provenance rule: a Section may be (re)filled only when untouched —
+ *  no provenance + empty column, an explicit 'empty' marker, or a previous
+ *  'ai_generated' fill (refreshable, P2.3 lock). 'typed'/'ai_then_edited'
+ *  are inviolable. */
+function mayFill(prov: string | undefined, currentValue: string | null): boolean {
+  if (prov === 'typed' || prov === 'ai_then_edited') return false;
+  if (prov === 'ai_generated' || prov === 'empty') return true;
+  return currentValue == null || currentValue.trim().length === 0;
+}
+
+/**
+ * Per-session OPD draft notes (P3 stitch input) + the whole-encounter draft
+ * + the §10.1 Section fill. Returns counters; never throws. LLM failures
+ * leave note_error with note_generated_at NULL (sweep retries); empty or
+ * non-clinical transcripts are STAMPED generated so they can't loop.
+ */
+async function generateNotes(
+  encounterId: string,
+  force: boolean,
+): Promise<{ done: number; failed: number; lastError: string | null }> {
+  let done = 0;
+  let failed = 0;
+  let lastError: string | null = null;
+  try {
+    const { rows: encRows } = await pool.query<{
+      patient_id: string;
+      doctor_email: string | null;
+      tagged_transcript: unknown;
+    }>(
+      `SELECT e.patient_id, d.email AS doctor_email, e.tagged_transcript
+         FROM encounters e LEFT JOIN doctors d ON d.id = e.doctor_id
+        WHERE e.id = $1`,
+      [encounterId],
+    );
+    if (encRows.length === 0) return { done, failed, lastError };
+    const enc = encRows[0];
+
+    const { rows: sessions } = await pool.query<NoteSessionRow>(
+      `SELECT id, seq, tagged_transcript, transcript_en
+         FROM encounter_sessions
+        WHERE encounter_id = $1
+          AND transcribed_at IS NOT NULL
+          AND (note_generated_at IS NULL OR $2::boolean)
+        ORDER BY seq ASC`,
+      [encounterId, force],
+    );
+
+    let generatedAny = false;
+    for (const s of sessions) {
+      const text = transcriptForNote(s.tagged_transcript, s.transcript_en);
+      if (text.length === 0) {
+        // Nothing to draft from — stamp done (never re-picked; ETA #11 lesson).
+        await pool.query(
+          `UPDATE encounter_sessions
+              SET note_generated_at = NOW(), note_error = 'empty_transcript'
+            WHERE id = $1`,
+          [s.id],
+        ).catch(() => { /* intentional: bookkeeping best-effort */ });
+        continue;
+      }
+      const trace = await openTrace({
+        surface: 'note-gen',
+        encounter_id: encounterId,
+        patient_id: enc.patient_id,
+        doctor_email: enc.doctor_email,
+        session_id: s.id,
+        request_input: { scope: 'session', seq: s.seq, transcript_chars: text.length, model: NOTE_MODEL },
+      });
+      trace.event('note', `Drafting session #${s.seq} note (${text.length} chars)`);
+      const r = await generateOpdNote(text);
+      if (r.ok) {
+        await pool.query(
+          `UPDATE encounter_sessions
+              SET note_json = $2::jsonb, note_generated_at = NOW(), note_error = NULL
+            WHERE id = $1`,
+          [s.id, JSON.stringify(r.note)],
+        );
+        done++;
+        generatedAny = true;
+        trace.event('note', `Session #${s.seq} draft ready`, r.latency_ms, true);
+        await trace.finalise({
+          status: 'completed',
+          result_summary: {
+            chief_complaint: r.note.chief_complaint.slice(0, 120),
+            has_content: noteHasContent(r.note),
+          },
+          model_calls: [{ model: r.model, latency_ms: r.latency_ms }],
+        });
+      } else {
+        failed++;
+        lastError = `note_gen: ${r.error}`;
+        await pool.query(
+          `UPDATE encounter_sessions SET note_error = $2 WHERE id = $1`,
+          [s.id, r.error.slice(0, 300)],
+        ).catch(() => { /* intentional: bookkeeping best-effort */ });
+        trace.event('note', `Session #${s.seq} draft failed: ${r.error.slice(0, 120)}`, r.latency_ms, true, true);
+        await trace.finalise({ status: 'errored', error_message: r.error.slice(0, 300) });
+      }
+    }
+
+    // Whole-encounter draft (Review Queue surface). N=1 → the session draft;
+    // N>1 → provisional regen from the full tagged transcript (stitch = P3).
+    if (generatedAny || force) {
+      const { rows: noted } = await pool.query<{ id: string; note_json: unknown }>(
+        `SELECT id, note_json FROM encounter_sessions
+          WHERE encounter_id = $1 AND note_json IS NOT NULL
+          ORDER BY seq ASC`,
+        [encounterId],
+      );
+      let encNote: OpdNote | null = null;
+      if (noted.length === 1) {
+        encNote = noted[0].note_json as OpdNote;
+      } else if (noted.length > 1) {
+        const fullText = transcriptForNote(enc.tagged_transcript, null) ||
+          (await (async () => {
+            const { rows: tx } = await pool.query<{ transcript_en: string | null }>(
+              `SELECT transcript_en FROM encounter_sessions
+                WHERE encounter_id = $1 AND transcript_en IS NOT NULL ORDER BY seq ASC`,
+              [encounterId],
+            );
+            return tx.map((t) => t.transcript_en ?? '').join('
+
+');
+          })());
+        if (fullText.trim().length > 0) {
+          const trace = await openTrace({
+            surface: 'note-gen',
+            encounter_id: encounterId,
+            patient_id: enc.patient_id,
+            doctor_email: enc.doctor_email,
+            request_input: { scope: 'encounter', sessions: noted.length, transcript_chars: fullText.length, model: NOTE_MODEL },
+          });
+          trace.event('note', `Drafting whole-encounter note (${noted.length} sessions)`);
+          const r = await generateOpdNote(fullText);
+          if (r.ok) {
+            encNote = r.note;
+            trace.event('note', 'Encounter draft ready', r.latency_ms, true);
+            await trace.finalise({
+              status: 'completed',
+              result_summary: { chief_complaint: r.note.chief_complaint.slice(0, 120), sessions: noted.length },
+              model_calls: [{ model: r.model, latency_ms: r.latency_ms }],
+            });
+          } else {
+            failed++;
+            lastError = `note_gen_encounter: ${r.error}`;
+            trace.event('note', `Encounter draft failed: ${r.error.slice(0, 120)}`, r.latency_ms, true, true);
+            await trace.finalise({ status: 'errored', error_message: r.error.slice(0, 300) });
+          }
+        }
+      }
+
+      if (encNote) {
+        await pool.query(
+          `UPDATE encounters SET note_json = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+          [encounterId, JSON.stringify(encNote)],
+        );
+
+        // §10.1 field-provenance merge — fill ONLY untouched text Sections.
+        try {
+          const { rows: cur } = await pool.query<{
+            chief_complaint_text: string | null;
+            exam_findings: string | null;
+            assessment_text: string | null;
+            field_provenance: Record<string, string> | null;
+          }>(
+            `SELECT chief_complaint_text, exam_findings, assessment_text, field_provenance
+               FROM encounters WHERE id = $1`,
+            [encounterId],
+          );
+          if (cur.length > 0) {
+            const prov = cur[0].field_provenance ?? {};
+            const sets: string[] = [];
+            const vals: unknown[] = [encounterId];
+            const newProv: Record<string, string> = {};
+            const tryFill = (field: string, column: string, current: string | null, value: string) => {
+              if (!value || !mayFill(prov[field], current)) return;
+              vals.push(value);
+              sets.push(`${column} = $${vals.length}`);
+              newProv[field] = 'ai_generated';
+            };
+            tryFill('chief_complaint_text', 'chief_complaint_text', cur[0].chief_complaint_text, encNote.chief_complaint);
+            tryFill('exam_findings', 'exam_findings', cur[0].exam_findings, encNote.examination);
+            tryFill('assessment_text', 'assessment_text', cur[0].assessment_text, encNote.assessment);
+            if (sets.length > 0) {
+              vals.push(JSON.stringify(newProv));
+              await pool.query(
+                `UPDATE encounters
+                    SET ${sets.join(', ')},
+                        field_provenance = COALESCE(field_provenance, '{}'::jsonb) || $${vals.length}::jsonb,
+                        updated_at = NOW()
+                  WHERE id = $1`,
+                vals,
+              );
+            }
+          }
+        } catch {
+          /* intentional: Section fill is an enrichment over note_json */
+        }
+      }
+    }
+  } catch (e) {
+    failed++;
+    lastError = `note_stage: ${(e instanceof Error ? e.message : String(e)).slice(0, 280)}`;
+  }
+  return { done, failed, lastError };
 }
 
 type DiarizeSessionRow = {
@@ -394,9 +646,9 @@ async function diarizeSessions(
   return { done, failed };
 }
 
-/** Encounters with pipeline work left (untranscribed sessions OR
- *  transcribed-but-undiarized — the P2.2 diarize soft-fail retry path),
- *  for the cron sweep. */
+/** Encounters with pipeline work left (untranscribed sessions, transcribed-
+ *  but-undiarized — P2.2 retry path — or transcribed-but-unnoted — P2.3
+ *  retry path), for the cron sweep. */
 export async function findUnprocessedEncounters(limit: number): Promise<string[]> {
   const { rows } = await pool.query<{ encounter_id: string }>(
     `SELECT DISTINCT s.encounter_id
@@ -404,7 +656,8 @@ export async function findUnprocessedEncounters(limit: number): Promise<string[]
        JOIN encounters e ON e.id = s.encounter_id
       WHERE s.audio_object_key IS NOT NULL
         AND ((s.status = 'uploaded' AND s.transcribed_at IS NULL)
-             OR (s.transcribed_at IS NOT NULL AND s.diarized_at IS NULL))
+             OR (s.transcribed_at IS NOT NULL AND s.diarized_at IS NULL)
+             OR (s.transcribed_at IS NOT NULL AND s.note_generated_at IS NULL))
         AND (e.processing_status NOT IN ('transcribing', 'generating')
              OR e.processing_started_at < NOW() - make_interval(mins => ${STALE_CLAIM_MINUTES}))
       LIMIT $1`,

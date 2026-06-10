@@ -181,7 +181,7 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
                     {fmtTime(s.started_at)} → {s.ended_at ? fmtTime(s.ended_at) : 'open'}
                   </div>
                   {/* P2.1/P2.2 pipeline chips: transcript → speakers */}
-                  {(s.transcribed_at || s.transcribe_error || s.diarized_at || s.diarize_error) && (
+                  {(s.transcribed_at || s.transcribe_error || s.diarized_at || s.diarize_error || s.note_generated_at || s.note_error) && (
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                       {s.transcribed_at ? (
                         <span className="rounded-full bg-emerald-50 px-1.5 text-[10px] text-emerald-700">
@@ -190,6 +190,19 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
                       ) : s.transcribe_error ? (
                         <span className="rounded-full bg-red-50 px-1.5 text-[10px] text-red-700" title={s.transcribe_error}>
                           transcribe ✗
+                        </span>
+                      ) : null}
+                      {s.note_generated_at && !s.note_error ? (
+                        <span className="rounded-full bg-emerald-50 px-1.5 text-[10px] text-emerald-700" title="Draft note generated — review in the queue">
+                          note ✓
+                        </span>
+                      ) : s.note_error && s.note_generated_at ? (
+                        <span className="rounded-full bg-even-ink-50 px-1.5 text-[10px] text-even-ink-400" title={s.note_error}>
+                          note —
+                        </span>
+                      ) : s.note_error ? (
+                        <span className="rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-700" title={`${s.note_error} — the hourly sweep retries`}>
+                          note retry…
                         </span>
                       ) : null}
                       {s.diarized_at ? (

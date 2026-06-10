@@ -1967,6 +1967,27 @@ export const MIGRATIONS: Migration[] = [
         WHERE transcribed_at IS NOT NULL AND diarized_at IS NULL;
     `,
   },
+  {
+    version: 44,
+    name: 'v7_4_session_notes',
+    sql: `
+      -- v7.4 / OPD-Demo-2 P2.3 — per-session draft notes (note-gen stage).
+      -- P2.3 locks (V, 10 Jun): BOTH levels — session.note_json = the
+      -- per-session draft (the P3 hybrid-stitch input); encounters.note_json
+      -- (migration 40) = the whole-encounter draft for the Review Queue.
+      -- note_error with note_generated_at NULL → the hourly sweep retries;
+      -- empty/non-clinical transcripts are stamped generated (no retry loop
+      -- — the ETA STT-lab #11 lesson).
+
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS note_json JSONB;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS note_generated_at TIMESTAMPTZ;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS note_error TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_unnoted
+        ON encounter_sessions (encounter_id)
+        WHERE transcribed_at IS NOT NULL AND note_generated_at IS NULL;
+    `,
+  },
 ];
 
 /**

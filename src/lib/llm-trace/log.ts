@@ -53,6 +53,8 @@ export type OpenTraceArgs = {
   encounter_id?: string | null;
   patient_id?: string | null;
   doctor_email?: string | null;
+  /** P2.3: ties a background note-gen trace to its recording session. */
+  session_id?: string | null;
   request_input?: unknown;
 };
 
@@ -86,15 +88,16 @@ export async function openTrace(args: OpenTraceArgs): Promise<TraceHandle> {
   try {
     await pool.query(
       `INSERT INTO llm_traces
-         (id, surface, encounter_id, patient_id, doctor_email,
+         (id, surface, encounter_id, patient_id, doctor_email, session_id,
           request_input, events, status, started_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'in_progress', $8)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, 'in_progress', $9)`,
       [
         id,
         args.surface,
         args.encounter_id ?? null,
         args.patient_id ?? null,
         args.doctor_email ?? null,
+        args.session_id ?? null,
         args.request_input ? JSON.stringify(args.request_input) : null,
         JSON.stringify([]),
         startedAt,
