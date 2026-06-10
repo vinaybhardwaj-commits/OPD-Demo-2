@@ -582,8 +582,16 @@ async function generateNotes(
       }
 
       if (encNote) {
+        // A fresh encounter note INVALIDATES the CDS (the stitch after visit 2
+        // must not leave visit-1 suggestions standing) — clearing the stamp
+        // makes the CDS stage right below re-run in this same pass.
+        // Re-proposal preserves accepted/ignored decisions.
         await pool.query(
-          `UPDATE encounters SET note_json = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+          `UPDATE encounters
+              SET note_json = $2::jsonb,
+                  cdmss_generated_at = NULL,
+                  updated_at = NOW()
+            WHERE id = $1`,
           [encounterId, JSON.stringify(encNote)],
         );
 
