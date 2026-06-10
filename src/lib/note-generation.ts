@@ -35,6 +35,24 @@ export type OpdNote = {
   };
 };
 
+/** The OPD note JSON schema block — shared by the per-session prompt and the
+ *  P3 stitch prompt so both always emit the same shape. */
+export const OPD_NOTE_SCHEMA_BLOCK = `{
+  "chief_complaint": string,                      // one line, patient's words when possible
+  "history_present_illness": string,              // 2-6 sentence prose narrative
+  "past_medical_history": [string, ...],          // each comorbidity/condition mentioned
+  "current_medications": [string, ...],           // include dose + frequency when stated
+  "allergies": [string, ...],                     // empty array if NKDA or not discussed
+  "examination": string,                          // exam findings prose, may include vital signs
+  "differential": [string, ...],                  // differentials the clinician actually voiced, most likely first
+  "assessment": string,                           // working dx + clinical reasoning as stated
+  "plan": {
+    "investigations": [string, ...],              // labs, imaging, procedures ordered
+    "treatment": [string, ...],                   // medications started/changed + non-drug treatments
+    "follow_up": string                           // when to return, red-flag advice
+  }
+}`;
+
 const SYSTEM = `You are converting an outpatient clinic consultation into a structured OPD Encounter Note. The transcript may be in English, an Indian language (e.g. Hindi, Kannada), or code-mixed — ALWAYS write the note in clear clinical English, translating faithfully and never adding content. Use ONLY information explicitly stated in the transcript — do not invent symptoms, medications, exam findings, doses, differentials, or follow-up plans. If a section was not discussed, return an empty string or empty array for that field.
 
 The transcript may be speaker-tagged, one utterance per line, e.g.:

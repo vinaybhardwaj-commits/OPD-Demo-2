@@ -68,6 +68,7 @@ import {
 } from './note-generation';
 import { openTrace } from './llm-trace/log';
 import { runCdmssPipeline, type OpdCdmss } from './cdmss-pipeline';
+import { generateStitchedNote, type StitchInputSession } from './stitch';
 
 const STALE_CLAIM_MINUTES = 30;
 
@@ -358,17 +359,25 @@ async function generateCdmss(
           [encounterId, JSON.stringify(it)],
         );
       }
+      for (const it of c.probabilities ?? []) {
+        await pool.query(
+          `INSERT INTO encounter_cdmss_items (encounter_id, item_group, payload)
+           VALUES ($1, 'probability', $2::jsonb)`,
+          [encounterId, JSON.stringify(it)],
+        );
+      }
     } catch {
       /* intentional: cdmss_json is canonical; item rows are the action layer */
     }
 
-    trace.event('persist', `CDS persisted (${r.cdmss.what_to_do.length} to-do, ${r.cdmss.what_else_to_ask.length} to-ask)`, undefined, true);
+    trace.event('persist', `CDS persisted (${r.cdmss.what_to_do.length} to-do, ${r.cdmss.what_else_to_ask.length} to-ask, ${(r.cdmss.probabilities ?? []).length} probability row(s))`, undefined, true);
     await trace.finalise({
       status: 'completed',
       result_summary: {
         what_to_do: r.cdmss.what_to_do.length,
         what_else_to_ask: r.cdmss.what_else_to_ask.length,
         differentials: r.cdmss.differentials_to_consider.length,
+        probabilities: (r.cdmss.probabilities ?? []).length,
         sources: r.cdmss.sources.length,
         used_critique: r.cdmss.retrieval_meta?.used_critique,
         used_revise: r.cdmss.retrieval_meta?.used_revise,
@@ -497,51 +506,77 @@ async function generateNotes(
       }
     }
 
-    // Whole-encounter draft (Review Queue surface). N=1 → the session draft;
-    // N>1 → provisional regen from the full tagged transcript (stitch = P3).
+    // Whole-encounter note (Review Queue surface). N=1 → the session draft;
+    // N>1 → P3a HYBRID STITCH (design §12.4, LOCKED): earlier sessions'
+    // drafts + the final session's verbatim tagged transcript + the
+    // orders/results chronology → one unified note (draft provisional,
+    // results interleaved, awaited tests carried into the plan).
     if (generatedAny || force) {
-      const { rows: noted } = await pool.query<{ id: string; note_json: unknown }>(
-        `SELECT id, note_json FROM encounter_sessions
-          WHERE encounter_id = $1 AND note_json IS NOT NULL
+      const { rows: allSessions } = await pool.query<StitchInputSession & { id: string }>(
+        `SELECT id, seq, started_at::text AS started_at, ended_at::text AS ended_at,
+                note_json, tagged_transcript, transcript_en
+           FROM encounter_sessions
+          WHERE encounter_id = $1 AND transcribed_at IS NOT NULL
           ORDER BY seq ASC`,
         [encounterId],
       );
+      const noted = allSessions.filter((r) => r.note_json != null);
       let encNote: OpdNote | null = null;
-      if (noted.length === 1) {
+      if (allSessions.length === 1 && noted.length === 1) {
         encNote = noted[0].note_json as OpdNote;
-      } else if (noted.length > 1) {
-        const fullText = transcriptForNote(enc.tagged_transcript, null) ||
-          (await (async () => {
-            const { rows: tx } = await pool.query<{ transcript_en: string | null }>(
-              `SELECT transcript_en FROM encounter_sessions
-                WHERE encounter_id = $1 AND transcript_en IS NOT NULL ORDER BY seq ASC`,
-              [encounterId],
-            );
-            return tx.map((t) => t.transcript_en ?? '').join('\n\n');
-          })());
-        if (fullText.trim().length > 0) {
-          const trace = await openTrace({
-            surface: 'note-gen',
-            encounter_id: encounterId,
-            patient_id: enc.patient_id,
-            doctor_email: enc.doctor_email,
-            request_input: { scope: 'encounter', sessions: noted.length, transcript_chars: fullText.length, model: NOTE_MODEL },
+      } else if (allSessions.length > 1) {
+        const trace = await openTrace({
+          surface: 'note-gen',
+          encounter_id: encounterId,
+          patient_id: enc.patient_id,
+          doctor_email: enc.doctor_email,
+          request_input: { scope: 'stitch', sessions: allSessions.length, model: NOTE_MODEL },
+        });
+        trace.event('stitch', `Stitching ${allSessions.length} sessions (drafts + final verbatim + chronology)`);
+        const st = await generateStitchedNote(encounterId, allSessions);
+        if (st.ok) {
+          encNote = st.note;
+          trace.event(
+            'stitch',
+            `Unified note ready (${st.chronology.orders} order(s), ${st.chronology.results} result(s), ${st.chronology.awaited} awaited)`,
+            st.latency_ms,
+            true,
+          );
+          await trace.finalise({
+            status: 'completed',
+            result_summary: {
+              chief_complaint: st.note.chief_complaint.slice(0, 120),
+              sessions: allSessions.length,
+              chronology: { orders: st.chronology.orders, results: st.chronology.results, awaited: st.chronology.awaited },
+            },
+            model_calls: [{ model: st.model, latency_ms: st.latency_ms }],
           });
-          trace.event('note', `Drafting whole-encounter note (${noted.length} sessions)`);
-          const r = await generateOpdNote(fullText);
-          if (r.ok) {
-            encNote = r.note;
-            trace.event('note', 'Encounter draft ready', r.latency_ms, true);
-            await trace.finalise({
-              status: 'completed',
-              result_summary: { chief_complaint: r.note.chief_complaint.slice(0, 120), sessions: noted.length },
-              model_calls: [{ model: r.model, latency_ms: r.latency_ms }],
-            });
+        } else {
+          // Fallback: full-transcript regen (the P2.3 provisional path) so a
+          // stitch-specific failure can't strand the encounter without a note.
+          trace.event('stitch', `Stitch failed (${st.error.slice(0, 100)}) — falling back to full-transcript draft`, st.latency_ms, false, true);
+          const fullText = transcriptForNote(enc.tagged_transcript, null) ||
+            allSessions.map((t) => transcriptForNote(t.tagged_transcript, t.transcript_en)).filter(Boolean).join('\n\n');
+          if (fullText.trim().length > 0) {
+            const r = await generateOpdNote(fullText);
+            if (r.ok) {
+              encNote = r.note;
+              trace.event('note', 'Fallback whole-encounter draft ready', r.latency_ms, true);
+              await trace.finalise({
+                status: 'completed',
+                result_summary: { chief_complaint: r.note.chief_complaint.slice(0, 120), sessions: allSessions.length, fallback: true },
+                model_calls: [{ model: r.model, latency_ms: r.latency_ms }],
+              });
+            } else {
+              failed++;
+              lastError = `note_stitch: ${st.error}`;
+              trace.event('note', `Fallback draft failed: ${r.error.slice(0, 120)}`, r.latency_ms, true, true);
+              await trace.finalise({ status: 'errored', error_message: `stitch: ${st.error.slice(0, 140)} | fallback: ${r.error.slice(0, 140)}` });
+            }
           } else {
             failed++;
-            lastError = `note_gen_encounter: ${r.error}`;
-            trace.event('note', `Encounter draft failed: ${r.error.slice(0, 120)}`, r.latency_ms, true, true);
-            await trace.finalise({ status: 'errored', error_message: r.error.slice(0, 300) });
+            lastError = `note_stitch: ${st.error}`;
+            await trace.finalise({ status: 'errored', error_message: st.error.slice(0, 300) });
           }
         }
       }

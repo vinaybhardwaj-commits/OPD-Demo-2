@@ -26,9 +26,11 @@ import type { OpdNote } from './note-generation';
 const DRAFT_MODEL = process.env.CDS_DRAFT_MODEL || 'qwen2.5:14b';
 const CRITIQUE_MODEL = process.env.CDS_CRITIQUE_MODEL || 'llama3.1:8b';
 const REVISE_MODEL = process.env.CDS_REVISE_MODEL || 'qwen2.5:14b';
+const PROB_MODEL = process.env.CDS_PROB_MODEL || 'qwen2.5:14b';
 const DRAFT_TIMEOUT_MS = 120_000;
 const CRITIQUE_TIMEOUT_MS = 45_000;
 const REVISE_TIMEOUT_MS = 90_000;
+const PROB_TIMEOUT_MS = 90_000;
 
 export type CdmssSource = {
   index: number; // 1-based citation marker
@@ -47,6 +49,14 @@ export type WhatToDoItem = { kind: WhatToDoKind; summary: string; reasoning: str
 export type WhatElseItem = { question: string; rationale: string; cites: number[] };
 export type CitedItem = { text: string; cites: number[] };
 export type CitedDdx = { dx: string; why: string; cites: number[] };
+/** P3b — one outcome-probability row (§12.2.3, two LOCKED groups). */
+export type ProbRow = {
+  label: string;
+  group: 'differential' | 'risk';
+  pct: number;
+  basis: string;
+  cites: number[];
+};
 
 export type OpdCdmss = {
   what_to_do: WhatToDoItem[];
@@ -55,6 +65,8 @@ export type OpdCdmss = {
   red_flags: CitedItem[];
   evidence_based_suggestions: CitedItem[];
   follow_up_considerations: CitedItem[];
+  /** P3b: differential likelihoods + clinical-outcome/risk probabilities. */
+  probabilities: ProbRow[];
   sources: CdmssSource[];
   retrieval_meta?: {
     topK: number;
@@ -64,6 +76,7 @@ export type OpdCdmss = {
     draft_ms: number;
     critique_ms?: number;
     revise_ms?: number;
+    prob_ms?: number;
     used_critique: boolean;
     used_revise: boolean;
   };
@@ -166,6 +179,30 @@ function sanitizeDdx(v: unknown, maxIndex: number): CitedDdx[] {
     .slice(0, 5);
 }
 
+function sanitizeProbs(v: unknown, maxIndex: number): ProbRow[] {
+  if (!Array.isArray(v)) return [];
+  const rows = v
+    .map((o) => {
+      if (!o || typeof o !== 'object') return null;
+      const x = o as { label?: unknown; group?: unknown; pct?: unknown; basis?: unknown; cites?: unknown };
+      const group = x.group === 'differential' || x.group === 'risk' ? x.group : null;
+      const pct = typeof x.pct === 'number' && Number.isFinite(x.pct) ? Math.max(0, Math.min(100, Math.round(x.pct))) : null;
+      if (!group || pct === null) return null;
+      return {
+        label: sStr(x.label, 160),
+        group,
+        pct,
+        basis: sStr(x.basis, 400),
+        cites: sanitizeCites(x.cites, maxIndex),
+      };
+    })
+    .filter((x): x is ProbRow => x !== null && x.label.length > 0);
+  return [
+    ...rows.filter((r) => r.group === 'differential').slice(0, 6),
+    ...rows.filter((r) => r.group === 'risk').slice(0, 5),
+  ];
+}
+
 // ---------- prompts ----------
 
 const DRAFT_SYSTEM = `You are a clinical decision support assistant reviewing an outpatient encounter note alongside excerpts from a medical knowledge base (MKSAP, StatPearls, UpToDate and similar). Surface what an attentive senior physician would point out.
@@ -208,6 +245,25 @@ Rules:
 - Every item MUST have at least one supporting cite; otherwise omit it
 - Do not repeat what the note already plans, except to refine it (evidence_based_suggestions)
 - Empty arrays are valid when nothing applies`;
+
+
+const PROB_SYSTEM = `You estimate clinical probabilities for an outpatient encounter, grounded in the SOURCE excerpts. Two labeled groups:
+
+1. group "differential" — likelihood of each candidate diagnosis given THIS presentation. Start from the differentials already entertained (listed in the context); you MAY add a diagnosis nobody voiced IF the sources clearly support it for this presentation. Percentages across the differential group should approximately sum to 100 (an "Other" row is allowed).
+2. group "risk" — clinical-outcome/risk probabilities relevant to this patient (e.g. likelihood of hospital admission, deterioration within 48h, a specific complication). These are independent probabilities, NOT a distribution.
+
+Return ONLY a JSON object:
+{
+  "probabilities": [
+    { "label": string, "group": "differential" | "risk", "pct": number, "basis": string, "cites": [number, ...] }
+  ]
+}
+
+Rules:
+- "basis" = ONE line citing the discriminating features ("burning post-prandial pain + age <50 + no exertional component")
+- Every row needs at least one source cite; omit rows you cannot ground
+- pct are integers 0-100; be conservative — avoid false precision beyond 5% steps
+- At most 6 differential rows and 5 risk rows; fewer is better than padded`;
 
 const CRITIQUE_SYSTEM = `You are auditing a draft clinical decision support output for citation support. You will receive:
 1. The numbered SOURCE excerpts the draft was generated from
@@ -264,6 +320,7 @@ type RawDraft = {
   follow_up_considerations?: unknown;
 };
 type RawCritique = { unsupported_items?: unknown; overall_quality?: string };
+type RawProbs = { probabilities?: unknown };
 
 async function callJson<T>(
   model: string,
@@ -357,6 +414,34 @@ export async function runCdmssPipeline(
     opts.onEvent?.('critique', `Citation audit unavailable (${critique.error}) — shipping draft`);
   }
 
+  // 6b. P3b — outcome probabilities (two locked groups; soft: failure ships
+  // the CDS without probability rows). Same sources; the final CDS draft +
+  // the note's entertained differentials anchor the distribution (model MAY
+  // add KB-supported diagnoses — P3 lock).
+  let probRows: ProbRow[] = [];
+  let probMs: number | undefined;
+  {
+    const entertained = [
+      ...note.differential,
+      ...(Array.isArray(finalParsed.differentials_to_consider)
+        ? (finalParsed.differentials_to_consider as Array<{ dx?: unknown }>).map((d) => (typeof d?.dx === 'string' ? d.dx : '')).filter(Boolean)
+        : []),
+    ];
+    const prob = await callJson<RawProbs>(
+      PROB_MODEL, PROB_TIMEOUT_MS, PROB_SYSTEM,
+      `ENCOUNTER CONTEXT:\n${seed}\n\nDIFFERENTIALS ALREADY ENTERTAINED:\n${entertained.length ? entertained.map((d) => `- ${d}`).join('\n') : '(none stated)'}\n\nSOURCES:\n\n${numbered}\n\nReturn the probabilities JSON.`,
+      0,
+    );
+    if (prob.ok) {
+      probRows = sanitizeProbs(prob.data.probabilities, maxIndex);
+      probMs = prob.latency_ms;
+      models.push({ model: PROB_MODEL, latency_ms: prob.latency_ms });
+      opts.onEvent?.('probabilities', `${probRows.filter((r) => r.group === 'differential').length} differential + ${probRows.filter((r) => r.group === 'risk').length} risk row(s)`, prob.latency_ms);
+    } else {
+      opts.onEvent?.('probabilities', `Probability pass unavailable (${prob.error}) — shipping CDS without it`);
+    }
+  }
+
   // 7. Sanitize + shape
   const cdmss: OpdCdmss = {
     what_to_do: sanitizeWhatToDo(finalParsed.what_to_do, maxIndex),
@@ -365,6 +450,7 @@ export async function runCdmssPipeline(
     red_flags: sanitizeCitedItems(finalParsed.red_flags, maxIndex),
     evidence_based_suggestions: sanitizeCitedItems(finalParsed.evidence_based_suggestions, maxIndex),
     follow_up_considerations: sanitizeCitedItems(finalParsed.follow_up_considerations, maxIndex),
+    probabilities: probRows,
     sources,
     retrieval_meta: {
       topK,
@@ -374,6 +460,7 @@ export async function runCdmssPipeline(
       draft_ms: draft.latency_ms,
       critique_ms: critiqueMs,
       revise_ms: reviseMs,
+      prob_ms: probMs,
       used_critique: critique.ok,
       used_revise: usedRevise,
     },

@@ -15,6 +15,7 @@ type WhatToDo = Cited & { kind: string; summary: string; reasoning: string };
 type WhatElse = Cited & { question: string; rationale: string };
 type CitedText = Cited & { text: string };
 type CitedDdx = Cited & { dx: string; why: string };
+type ProbRow = Cited & { label: string; group: 'differential' | 'risk'; pct: number; basis: string };
 type Source = { index: number; book: string | null; chapter: string | null; section: string | null; excerpt: string };
 
 export type CdmssPayload = {
@@ -24,6 +25,7 @@ export type CdmssPayload = {
   red_flags?: CitedText[];
   evidence_based_suggestions?: CitedText[];
   follow_up_considerations?: CitedText[];
+  probabilities?: ProbRow[];
   sources?: Source[];
 };
 
@@ -89,7 +91,9 @@ export function CdmssCard({
     items.find(
       (i) =>
         i.item_group === group &&
-        ((i.payload.summary as string) === key || (i.payload.question as string) === key),
+        ((i.payload.summary as string) === key ||
+          (i.payload.question as string) === key ||
+          (i.payload.label as string) === key),
     );
 
   const ItemActions = ({ row }: { row: CdmssItemRow | undefined }) => {
@@ -136,6 +140,9 @@ export function CdmssCard({
   const ebs = cdmss.evidence_based_suggestions ?? [];
   const fu = cdmss.follow_up_considerations ?? [];
   const sources = cdmss.sources ?? [];
+  const probs = cdmss.probabilities ?? [];
+  const probDdx = probs.filter((p) => p.group === 'differential');
+  const probRisk = probs.filter((p) => p.group === 'risk');
   const advisoryCount = ddx.length + flags.length + ebs.length + fu.length;
 
   return (
@@ -192,6 +199,48 @@ export function CdmssCard({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {probs.length > 0 && (
+        <div className="mt-3">
+          <h3 className="text-[11px] font-bold text-even-navy-800">Outcome probabilities</h3>
+          <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-2">
+            {[{ title: 'Differential likelihood', rows: probDdx, distr: true },
+              { title: 'Clinical risk', rows: probRisk, distr: false }].map((g) =>
+              g.rows.length > 0 ? (
+                <div key={g.title} className="rounded-lg border border-violet-100 bg-white p-2">
+                  <h4 className="text-[10px] font-bold uppercase text-even-ink-500">
+                    {g.title}
+                    {!g.distr && <span className="ml-1 font-normal normal-case">(independent)</span>}
+                  </h4>
+                  <ul className="mt-1.5 space-y-1.5">
+                    {g.rows.map((r, i) => {
+                      const row = rowFor('probability', r.label);
+                      return (
+                        <li key={i}>
+                          <div className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="font-medium text-even-ink-800">
+                              {r.label}
+                              <Cites cites={r.cites} />
+                            </span>
+                            <span className="flex items-center gap-2">
+                              <span className="font-mono font-semibold text-violet-700">{r.pct}%</span>
+                              <ItemActions row={row} />
+                            </span>
+                          </div>
+                          <div className="mt-0.5 h-1 w-full overflow-hidden rounded bg-even-ink-50">
+                            <div className="h-1 rounded bg-violet-400" style={{ width: `${Math.min(100, r.pct)}%` }} />
+                          </div>
+                          {r.basis ? <p className="mt-0.5 text-[10px] text-even-ink-400">{r.basis}</p> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null,
+            )}
+          </div>
         </div>
       )}
 
