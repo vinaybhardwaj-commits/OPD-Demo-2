@@ -77,6 +77,9 @@ export function ComorbidityBand({
     [encounterId],
   );
   const [dismissed, setDismissed] = useState(false);
+  // D.2 (V, 10 Jun): suggestions live in a right slide-over, fetched ON OPEN —
+  // never auto-fired on page load (it was distracting + burned an LLM call).
+  const [panelOpen, setPanelOpen] = useState(false);
 
   // Restore session dismiss flag
   useEffect(() => {
@@ -104,17 +107,17 @@ export function ComorbidityBand({
   const active = comorbidities.filter((c) => !c.is_resolved);
   const empty = active.length === 0;
 
-  // v3.9.3 — passive demographics fetch (only when truly empty + encounterId present + not dismissed + not readOnly)
+  // v3.9.3 demographics fetch — D.2: ON-DEMAND only. Fires when the doctor
+  // opens the AI-suggestions slide-over (first open per mount; ↻ re-fires).
   useEffect(() => {
     if (readOnly) return;
     if (!encounterId) return;
     if (loading) return;
+    if (!panelOpen) return;
     if (!empty) {
-      // Once doctor adds one, drop the suggest block — v3.9.2 'Suggest from history' takes over
       setSuggest(null);
       return;
     }
-    if (dismissed) return;
     if (suggest) return; // already fetched this mount
 
     let cancelled = false;
@@ -149,9 +152,17 @@ export function ComorbidityBand({
               resultRef.current = ev.data as ResultBody;
             } else if (ev.type === 'done') {
               setTraceTotalMs(ev.ms);
-              setTraceEvents((prev) => [...prev, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }]);
+              setTraceEvents((prev) => {
+                // Terminal event must close the last in-progress step too —
+                // otherwise the final stage ('Saving — caching priors') spins forever.
+                const next = prev.map((p, i) => (i === prev.length - 1 && !p.done ? { ...p, done: true } : p));
+                return [...next, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }];
+              });
             } else if (ev.type === 'error') {
-              setTraceEvents((prev) => [...prev, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }]);
+              setTraceEvents((prev) => {
+                const next = prev.map((p, i) => (i === prev.length - 1 && !p.done ? { ...p, done: true } : p));
+                return [...next, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }];
+              });
             }
           });
           if (cancelled) return;
@@ -170,7 +181,7 @@ export function ComorbidityBand({
       }
     })();
     return () => { cancelled = true; };
-  }, [empty, encounterId, dismissed, readOnly, loading, suggest]);
+  }, [empty, encounterId, panelOpen, readOnly, loading, suggest]);
 
   const acceptSuggestion = useCallback(async (s: DemographicsSuggestion) => {
     if (acceptingCode) return;
@@ -195,6 +206,7 @@ export function ComorbidityBand({
 
   const dismissAll = useCallback(() => {
     setDismissed(true);
+    setPanelOpen(false);
     if (dismissKey) {
       try { sessionStorage.setItem(dismissKey, '1'); } catch { /* ignore */ }
     }
@@ -204,9 +216,8 @@ export function ComorbidityBand({
   const ccLabel = (visitReasonHint || '').trim().slice(0, 40);
 
   const okSuggest = suggest && suggest.status === 'ok' ? suggest : null;
-  const showSuggestBlock =
-    !readOnly && empty && !dismissed && encounterId &&
-    (suggestLoading || (okSuggest && okSuggest.findings.length > 0));
+  // D.2 — the block renders inside the right slide-over, only while open.
+  const showSuggestBlock = !readOnly && empty && encounterId && panelOpen;
 
   return (
     <>
@@ -246,6 +257,16 @@ export function ComorbidityBand({
               )}
               {!readOnly && (
                 <div className="ml-auto flex gap-1.5">
+                  {empty && encounterId && (
+                    <button
+                      type="button"
+                      onClick={() => { setDismissed(false); setPanelOpen(true); }}
+                      className="rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700 hover:bg-violet-100"
+                      title="AI-suggested likely comorbidities for this demographic + complaint — opens in a side panel; nothing runs until you ask"
+                    >
+                      ✨ AI suggestions
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setModalOpen(true)}
@@ -272,9 +293,25 @@ export function ComorbidityBand({
               </div>
             )}
 
-            {/* v3.9.3 — passive demographics-suggest block (empty-state, dotted violet) */}
+            {/* v3.9.3 → D.2 — demographics-suggest, now an on-demand right slide-over */}
             {showSuggestBlock && (
-              <div className="mt-3 rounded-lg border border-dashed border-violet-300 bg-violet-50/40 p-3">
+              <div className="fixed inset-0 z-40">
+                <div
+                  className="absolute inset-0 bg-even-navy-900/20 backdrop-blur-[1px]"
+                  onClick={() => setPanelOpen(false)}
+                />
+                <aside className="absolute right-0 top-0 h-full w-full max-w-[480px] overflow-y-auto bg-white p-4 shadow-2xl">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wide text-violet-700">✨ AI comorbidity suggestions</h3>
+                    <button
+                      type="button"
+                      onClick={() => setPanelOpen(false)}
+                      className="rounded-md bg-even-ink-50 px-2 py-0.5 text-xs font-semibold text-even-ink-600 hover:bg-even-ink-100"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+                  <div className="rounded-lg border border-dashed border-violet-300 bg-violet-50/40 p-3">
                 <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
                   <div className="text-[11px] font-medium text-violet-800">
                     ✨ Suggested for {patientAge}{sexLabel}
@@ -328,6 +365,8 @@ export function ComorbidityBand({
                     ))}
                   </div>
                 )}
+                  </div>
+                </aside>
               </div>
             )}
           </>
