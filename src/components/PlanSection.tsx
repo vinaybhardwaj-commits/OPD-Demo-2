@@ -67,6 +67,9 @@ export type PlanSectionProps = {
   /** Called after a successful submit so the parent can transition the
    *  encounter UI (e.g. show the print-prescription screen). */
   onSubmitted?: (newStatus: string) => void;
+  /** D.5 (V, 10 Jun): the classic editor hides the inline chip wall —
+   *  the floating Disposition fan in the sticky bar is the picker. */
+  hideManualWall?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -77,6 +80,7 @@ export default function PlanSection({
   encounterId,
   n,
   encounterStatus,
+  hideManualWall,
   predictionTrigger = 0,
   onSubmitted,
 }: PlanSectionProps) {
@@ -354,8 +358,8 @@ export default function PlanSection({
           </ol>
         )}
 
-        {/* Manual chip wall — pick a kind */}
-        {!isReadOnly && submittedCount === 0 && (
+        {/* Manual chip wall — pick a kind (hidden when the floating fan owns picking) */}
+        {!isReadOnly && submittedCount === 0 && !hideManualWall && (
           <div className="space-y-1.5">
             <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
               Or pick manually
