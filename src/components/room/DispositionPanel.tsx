@@ -18,14 +18,17 @@ export function DispositionPanel({
   encounterId,
   encounterStatus,
   clinicalStatus,
+  force,
 }: {
   encounterId: string;
   encounterStatus: string;
   clinicalStatus: string;
+  /** D.3: render regardless of clinical lane (classic editor's persistent bar). */
+  force?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const router = useRouter();
-  const eligible = ['in_room', 'back_ready', 'ready_for_review'].includes(clinicalStatus);
+  const eligible = force || ['in_room', 'back_ready', 'ready_for_review'].includes(clinicalStatus);
   if (!eligible) return null;
 
   return (

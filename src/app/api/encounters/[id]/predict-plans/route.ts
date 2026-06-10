@@ -58,7 +58,7 @@ async function ownsEncounter(
 // ---------------------------------------------------------------------------
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const session = await getCurrentDoctor();
@@ -90,6 +90,18 @@ export async function GET(
       ok: true,
       result: latest,
       stale,
+      current_snapshot_hash: currentHash,
+    });
+  }
+
+  // D.3 (V, 10 Jun): ?cache_only=1 — NEVER run the LLM from a page load.
+  // Fresh predictions fire only from the doctor's button (POST) or the
+  // background pipeline after a disposition.
+  if (new URL(req.url).searchParams.get('cache_only') === '1') {
+    return NextResponse.json({
+      ok: true,
+      result: { ok: false, predictions: [], reason: 'no_cached_prediction', snapshot_hash: currentHash },
+      stale: false,
       current_snapshot_hash: currentHash,
     });
   }

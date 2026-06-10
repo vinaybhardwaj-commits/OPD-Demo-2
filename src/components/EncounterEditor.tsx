@@ -45,6 +45,7 @@ import { DdxOnDemand } from './DdxOnDemand';
 import { DiagnosticsQuickAddStrip } from './DiagnosticsQuickAddStrip';
 import PlanSection from './PlanSection';
 import { CounsellingGate, type CounsellingTranscript } from './CounsellingGate';
+import { DispositionPanel } from './room/DispositionPanel';
 
 type Vitals = {
   bp_sys?: number | '';
@@ -791,6 +792,14 @@ export function EncounterEditor({
       {!readOnly && (
         <div className="sticky bottom-0 -mx-6 border-t border-even-ink-100 bg-white/95 px-6 py-4 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* D.3 — the disposition slide-over is PERSISTENT: always one tap
+                away from the sticky bar, same engine as section 7 / the Room. */}
+            <DispositionPanel
+              encounterId={initial.id}
+              encounterStatus={initial.status}
+              clinicalStatus=""
+              force
+            />
             <div className="min-w-0 flex-1">
               {submitError && (
                 <p className="text-xs text-even-pink-700">{submitError}</p>

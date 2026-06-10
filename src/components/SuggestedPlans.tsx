@@ -125,8 +125,10 @@ export default function SuggestedPlans({
         // GET = cheap cached read (no LLM). POST = force fresh — stream
         // NDJSON so the TracePanel renders live.
         if (!force) {
+          // D.3: cache_only — page loads and content edits NEVER run the LLM;
+          // they only read (and staleness-mark) the persisted prediction.
           const res = await fetch(
-            `/api/encounters/${encodeURIComponent(encounterId)}/predict-plans`,
+            `/api/encounters/${encodeURIComponent(encounterId)}/predict-plans?cache_only=1`,
             { method: 'GET', cache: 'no-store' },
           );
           const body = (await res.json()) as PredictionResponse;
@@ -169,9 +171,15 @@ export default function SuggestedPlans({
             resultRef.current = ev.data as PredictionResponse;
           } else if (ev.type === 'done') {
             setTraceTotalMs(ev.ms);
-            setTraceEvents((prev) => [...prev, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }]);
+            setTraceEvents((prev) => {
+              const next = prev.map((p, i) => (i === prev.length - 1 && !p.done ? { ...p, done: true } : p));
+              return [...next, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }];
+            });
           } else if (ev.type === 'error') {
-            setTraceEvents((prev) => [...prev, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }]);
+            setTraceEvents((prev) => {
+              const next = prev.map((p, i) => (i === prev.length - 1 && !p.done ? { ...p, done: true } : p));
+              return [...next, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }];
+            });
           }
         });
 
@@ -202,14 +210,17 @@ export default function SuggestedPlans({
     void fetchPrediction(false);
   }, [fetchPrediction]);
 
-  // Trigger debounced refresh on dependency change.
+  // D.3 (V, 10 Jun): content changes only RE-READ the cache (marks the
+  // suggestions stale via snapshot-hash) — they never auto-fire the LLM.
+  // Fresh runs: the doctor's ↻/✨ button, or the background pipeline after
+  // a partial/final disposition.
   useEffect(() => {
     if (predictionTrigger === 0) return;
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
     }
     debounceRef.current = window.setTimeout(() => {
-      void fetchPrediction(true);
+      void fetchPrediction(false);
     }, 2000);
     return () => {
       if (debounceRef.current !== null) {
@@ -235,7 +246,21 @@ export default function SuggestedPlans({
   // Hidden states
   if (disabled) return null;
   if (error) return null; // Soft-fail
-  if (predictions !== null && predictions.length === 0 && !loading) return null;
+  if (predictions !== null && predictions.length === 0 && !loading) {
+    // D.3: no cached prediction — offer the run instead of vanishing.
+    return (
+      <div className="mb-3">
+        <button
+          type="button"
+          onClick={() => void fetchPrediction(true)}
+          className="rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700 hover:bg-violet-100"
+          title="Ask the reasoning model to rank likely plans for this encounter — runs only when you click"
+        >
+          ✨ Suggest plans (AI)
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">
