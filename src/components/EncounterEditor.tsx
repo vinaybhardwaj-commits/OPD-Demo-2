@@ -44,6 +44,7 @@ import { FlagHandoffModal } from './FlagHandoffModal';
 import { DdxOnDemand } from './DdxOnDemand';
 import { DiagnosticsQuickAddStrip } from './DiagnosticsQuickAddStrip';
 import PlanSection from './PlanSection';
+import { CounsellingGate, type CounsellingTranscript } from './CounsellingGate';
 
 type Vitals = {
   bp_sys?: number | '';
@@ -172,6 +173,8 @@ export function EncounterEditor({
   labSummary,
   sectionEditors,
   selfDoctorId,
+  counsellingEligible,
+  counsellingTranscripts,
 }: {
   initial: EncounterEditable;
   patient: EncounterPatient;
@@ -181,6 +184,10 @@ export function EncounterEditor({
   sectionEditors?: SectionEditorNameMap | null;
   /** v2.3 — viewing doctor's doctors-row id; chips suppressed when self. */
   selfDoctorId?: string | null;
+  /** D.1 — server-computed: a terminal-kind plan already exists (gate shows immediately). */
+  counsellingEligible?: boolean;
+  /** D.1 — existing final-counselling sessions (faithful transcripts). */
+  counsellingTranscripts?: CounsellingTranscript[];
 }) {
   const aiSafe: EncounterAi = ai ?? AI_EMPTY;
   const router = useRouter();
@@ -769,6 +776,14 @@ export function EncounterEditor({
           ccChips.length + cc.length + exam.length + assessment.length + assessmentCodes.length
         }
         onSubmitted={() => router.refresh()}
+      />
+
+      {/* D.1 — final counselling lives at the disposition beat: appears once a
+          terminal-kind plan exists, right above Submit & finish (V, 10 Jun). */}
+      <CounsellingGate
+        encounterId={initial.id}
+        initialEligible={counsellingEligible ?? false}
+        transcripts={counsellingTranscripts ?? []}
       />
 
       <TranscriptViewer ref={transcriptRef} encounterId={initial.id} />

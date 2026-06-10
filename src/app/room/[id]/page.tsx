@@ -16,6 +16,7 @@ import { getCurrentDoctor } from '@/lib/auth';
 import { pool } from '@/lib/db';
 import { loadRoomEncounter } from '@/lib/room';
 import { RoomControls } from '@/components/room/RoomControls';
+import { DispositionPanel } from '@/components/room/DispositionPanel';
 import { RoomCaptureProvider } from '@/components/room/RoomCapture';
 import { LiveTranscript } from '@/components/room/LiveTranscript';
 import { CdmssCard, type CdmssPayload } from '@/components/room/CdmssCard';
@@ -110,7 +111,12 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
           <span className="rounded-full bg-even-ink-50 px-2 py-0.5 text-[10px] text-even-ink-500">
             phase: {enc.current_phase}
           </span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <DispositionPanel
+              encounterId={enc.id}
+              encounterStatus={enc.status}
+              clinicalStatus={enc.clinical_status}
+            />
             <RoomControls
               encounterId={enc.id}
               clinicalStatus={enc.clinical_status}

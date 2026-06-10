@@ -51,7 +51,10 @@ export const CLINICAL_TRANSITIONS: Record<ClinicalStatus, ClinicalStatus[]> = {
   out_for_workup: ['back_ready', 'in_room', 'cancelled'],
   back_ready: ['in_room', 'cancelled'],
   processing: ['ready_for_review', 'cancelled'],
-  ready_for_review: ['finalizing', 'cancelled'],
+  // D.1 (V, 10 Jun): re-open allowed — the doctor can call the patient back
+  // in from the Review queue for another recorded pass; the next End visit
+  // re-stitches and refreshes the CDS. Fully elastic while in the OPD.
+  ready_for_review: ['finalizing', 'in_room', 'cancelled'],
   finalizing: ['complete'],
   complete: [],
   cancelled: [],

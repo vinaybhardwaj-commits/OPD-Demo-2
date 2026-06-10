@@ -12,7 +12,7 @@ import { pool } from '@/lib/db';
 import { getCurrentDoctor } from '@/lib/auth';
 import { EncounterEditor, type EncounterEditable } from '@/components/EncounterEditor';
 import { CdmssCard, type CdmssPayload, type CdmssItemRow } from '@/components/room/CdmssCard';
-import { CounsellingCapture } from '@/components/CounsellingCapture';
+
 import { AskTheChartRail } from '@/components/AskTheChartRail';
 import { EncounterTopBar } from '@/components/encounter/EncounterTopBar';
 import { PatientContextStrip } from '@/components/encounter/PatientContextStrip';
@@ -241,6 +241,16 @@ export default async function EncounterPage({
   );
   const cdmssItems = cdmssItemRows as CdmssItemRow[];
 
+  // D.1 — counselling gate eligibility: a terminal-kind plan already exists
+  // (kinds whose submit completes the encounter; diagnostics/imaging excluded).
+  const { rows: termPlans } = await pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM encounter_plans
+      WHERE encounter_id = $1
+        AND kind::text NOT IN ('diagnostics', 'imaging')`,
+    [id],
+  );
+  const counsellingEligible = parseInt(termPlans[0]?.n ?? '0', 10) > 0;
+
   // P4.2 — final-counselling sessions (faithful transcripts, no review gate).
   const { rows: counselling } = await pool.query<{
     seq: number;
@@ -374,37 +384,14 @@ export default async function EncounterPage({
           </p>
         ) : null}
 
-        {/* P4.2 — final counselling: optional capture + faithful transcripts */}
-        {(row.clinical_status === 'ready_for_review' || row.clinical_status === 'finalizing' || row.clinical_status === 'complete') && (
-          <div className="mb-6 space-y-2">
-            <CounsellingCapture encounterId={row.id} />
-            {counselling.map((c) =>
-              c.transcript_en ? (
-                <div key={c.seq} className="rounded-xl border border-even-ink-200 bg-even-ink-50/40 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-even-ink-500">
-                    Final counselling — faithful transcript (session #{c.seq})
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm text-even-ink-800">{c.transcript_en}</p>
-                </div>
-              ) : c.transcribe_error ? (
-                <p key={c.seq} className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
-                  Counselling transcript pending retry ({c.transcribe_error.slice(0, 50)}…) — the hourly sweep self-heals.
-                </p>
-              ) : (
-                <p key={c.seq} className="rounded-xl border border-even-ink-200 bg-white p-2 text-[11px] text-even-ink-500">
-                  Counselling session #{c.seq} — transcribing in the background…
-                </p>
-              ),
-            )}
-          </div>
-        )}
-
         {/* v2.1.5 — doctor-side lab orders + results panel. */}
         <div id="encounter-lab-results" className="mb-6">
           <EncounterLabResults encounterId={row.id} />
         </div>
 
         <EncounterEditor
+          counsellingEligible={counsellingEligible}
+          counsellingTranscripts={counselling}
           patient={{
             id: row.patient_id,
             name: row.patient_name,

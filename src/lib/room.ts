@@ -29,6 +29,7 @@ export type RoomSession = {
 export type RoomEncounter = {
   id: string;
   encounter_number: string;
+  status: string;
   clinical_status: ClinicalStatus;
   processing_status: ProcessingStatus;
   current_phase: EncounterPhase;
@@ -50,7 +51,7 @@ export type RoomEncounter = {
 
 export async function loadRoomEncounter(id: string): Promise<RoomEncounter | null> {
   const { rows } = await pool.query(
-    `SELECT e.id, e.encounter_number, e.clinical_status, e.processing_status,
+    `SELECT e.id, e.encounter_number, e.status::text AS status, e.clinical_status, e.processing_status,
             e.current_phase, e.started_at::text AS started_at,
             e.cdmss_json, e.cdmss_error,
             COALESCE(e.chief_complaint_text, array_to_string(e.chief_complaint_chips, ', ')) AS chief_complaint,

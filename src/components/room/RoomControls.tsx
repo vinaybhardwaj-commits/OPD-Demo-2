@@ -298,13 +298,20 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
         <span className="text-xs text-red-600">Mic permission denied — check browser settings</span>
       )}
 
-      {(clinicalStatus === 'ready' || clinicalStatus === 'back_ready') && (
+      {(clinicalStatus === 'ready' || clinicalStatus === 'back_ready' || clinicalStatus === 'ready_for_review') && (
         <button
           onClick={() => fire('enter_room')}
           disabled={busy !== null}
           className={`${btn} bg-even-blue-600 text-white hover:bg-even-blue-700`}
+          title={clinicalStatus === 'ready_for_review' ? 'Re-open the encounter for another recorded pass — the next End visit re-stitches the note and refreshes the AI suggestions' : undefined}
         >
-          {busy === 'enter_room' ? 'Starting…' : clinicalStatus === 'back_ready' ? 'Continue encounter' : 'Start visit'}
+          {busy === 'enter_room'
+            ? 'Starting…'
+            : clinicalStatus === 'back_ready'
+              ? 'Continue encounter'
+              : clinicalStatus === 'ready_for_review'
+                ? 'Call patient back in'
+                : 'Start visit'}
         </button>
       )}
 
