@@ -83,6 +83,22 @@ export async function signGetUrl(opts: {
   return getSignedUrl(client(), cmd, { expiresIn: opts.expiresInSeconds ?? 3600 });
 }
 
+/** Server-side direct PUT (small objects — voice enrollment clips). */
+export async function putObjectBytes(
+  key: string,
+  bytes: Buffer | Uint8Array,
+  contentType: string,
+): Promise<void> {
+  await client().send(
+    new PutObjectCommand({
+      Bucket: bucket(),
+      Key: key,
+      Body: bytes,
+      ContentType: contentType,
+    }),
+  );
+}
+
 export async function headObject(
   key: string,
 ): Promise<{ size: number | null; contentType: string | null }> {

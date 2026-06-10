@@ -13,6 +13,7 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentDoctor } from '@/lib/auth';
+import { pool } from '@/lib/db';
 import { loadRoomEncounter } from '@/lib/room';
 import { RoomControls } from '@/components/room/RoomControls';
 import { RoomCaptureProvider } from '@/components/room/RoomCapture';
@@ -54,6 +55,23 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
   const { id } = await params;
   const enc = await loadRoomEncounter(id);
   if (!enc) notFound();
+
+  // P1.6: signed-in doctor's voiceprint status for the speaker pill.
+  let speakerEnrolled = false;
+  try {
+    const { rows: vpRows } = await pool.query<{ enrolled: boolean }>(
+      `SELECT (vp.doctor_id IS NOT NULL) AS enrolled
+         FROM doctors d
+         LEFT JOIN voice_print vp ON vp.doctor_id = d.id
+        WHERE lower(d.email) = lower($1)
+        LIMIT 1`,
+      [session.email],
+    );
+    speakerEnrolled = vpRows[0]?.enrolled ?? false;
+  } catch {
+    /* intentional: voice_print lands with migration 41 — tolerate the
+       deploy→migrate window (pill simply hides) */
+  }
 
   const v = (enc.vitals ?? {}) as Record<string, unknown>;
   const vitalChips: Array<[string, string]> = [];
@@ -136,7 +154,7 @@ export default async function RoomPage({ params }: { params: Promise<{ id: strin
         </section>
 
         {/* Live transcript rail — P1.3 Deepgram live (hybrid blocks) */}
-        <LiveTranscript encounterId={enc.id} />
+        <LiveTranscript encounterId={enc.id} speakerEnrolled={speakerEnrolled} />
 
         {/* Sessions timeline */}
         <section className="rounded-xl border border-even-ink-200 bg-white p-4">

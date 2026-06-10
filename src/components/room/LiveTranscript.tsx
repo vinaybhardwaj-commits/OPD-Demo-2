@@ -33,6 +33,8 @@ type Block = { id: number; segs: Seg[] };
 
 type Props = {
   encounterId: string;
+  /** P1.6: signed-in doctor's voiceprint enrollment state (live speaker ID lands with P2 diarize). */
+  speakerEnrolled?: boolean;
 };
 
 const SAFARI_STREAMING_GUARD = process.env.NEXT_PUBLIC_OPD2_SAFARI_STREAMING_GUARD === '1';
@@ -51,7 +53,7 @@ const CHIP: Record<string, { label: string; cls: string }> = {
   unavailable: { label: 'unavailable here', cls: 'bg-even-ink-100 text-even-ink-400' },
 };
 
-export function LiveTranscript({ encounterId }: Props) {
+export function LiveTranscript({ encounterId, speakerEnrolled }: Props) {
   const capture = useRoomCapture();
   const recording = capture?.recording ?? false;
   const stream = capture?.stream ?? null;
@@ -165,6 +167,16 @@ export function LiveTranscript({ encounterId }: Props) {
           <span className="rounded-full bg-even-blue-50 px-2 py-0.5 font-mono text-[10px] text-even-blue-700">
             {language}
           </span>
+        ) : null}
+        {/* P1.6 speaker pill placeholder — live per-utterance speaker ID lands with P2 diarize */}
+        {speakerEnrolled === true ? (
+          <span className="rounded-full bg-even-ink-50 px-2 py-0.5 text-[10px] text-even-ink-500" title="Voiceprint enrolled — live speaker labels arrive with the P2 pipeline">
+            🎙 voiceprint ✓ · ID in P2
+          </span>
+        ) : speakerEnrolled === false ? (
+          <a href="/enroll/voice" className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 hover:underline" title="Enroll your voice so recordings can label you">
+            🎙 not enrolled — set up
+          </a>
         ) : null}
         {/* Display selector — all engines run in parallel; this only switches
             the visible trace. Locked while a session is live. */}

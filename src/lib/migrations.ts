@@ -1871,6 +1871,49 @@ export const MIGRATIONS: Migration[] = [
         ON llm_traces(session_id, started_at DESC) WHERE session_id IS NOT NULL;
     `,
   },
+  {
+    version: 41,
+    name: 'v7_1_voiceprints',
+    sql: `
+      -- v7.1 / OPD-Demo-2 P1.6 — Voiceprints (full ETA shapes, UUID FKs).
+      -- voice_print = computed-centroid cache (192-dim ECAPA, 768 bytes);
+      -- voice_sample = per-clip retention (enrollment now, passive in P2).
+      -- Centroid is the running average of all included samples —
+      -- accumulate, never overwrite (ETA Voiceprint Retention PRD).
+
+      CREATE TABLE IF NOT EXISTS voice_print (
+        doctor_id                UUID PRIMARY KEY REFERENCES doctors(id) ON DELETE CASCADE,
+        centroid                 BYTEA NOT NULL,
+        sample_count             INT NOT NULL DEFAULT 0,
+        samples_json             JSONB NOT NULL DEFAULT '[]'::jsonb,
+        enrolled_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_sample_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        match_confidence_30d_avg DOUBLE PRECISION,
+        needs_reenrollment       BOOLEAN NOT NULL DEFAULT FALSE
+      );
+      CREATE INDEX IF NOT EXISTS idx_voice_print_needs_reenrollment
+        ON voice_print(needs_reenrollment);
+
+      CREATE TABLE IF NOT EXISTS voice_sample (
+        id                   TEXT PRIMARY KEY,
+        clinician_id         UUID NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
+        source               TEXT NOT NULL DEFAULT 'enrollment',
+        embedding            BYTEA NOT NULL,
+        audio_r2_key         TEXT,
+        source_encounter_id  UUID,
+        content_type         TEXT,
+        duration_ms          INT,
+        session_id           TEXT,
+        sample_index         INT,
+        match_confidence     DOUBLE PRECISION,
+        included             BOOLEAN NOT NULL DEFAULT TRUE,
+        captured_by_admin_id UUID,
+        created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_voice_sample_clinician ON voice_sample(clinician_id);
+      CREATE INDEX IF NOT EXISTS idx_voice_sample_source ON voice_sample(source);
+    `,
+  },
 ];
 
 /**
