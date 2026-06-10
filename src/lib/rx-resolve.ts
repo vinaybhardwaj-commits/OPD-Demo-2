@@ -119,6 +119,7 @@ export async function resolveDrugText(qRaw: string): Promise<RxResolveResult> {
   try {
     matches = await trigram(terms, 12);
   } catch {
+    /* intentional: trigram failure → empty matches; LLM parse still returned */
     matches = [];
   }
   const brandTyped = (parsed?.brand_hint || rawNameOnly).toLowerCase();

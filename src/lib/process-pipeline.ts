@@ -70,7 +70,11 @@ import { openTrace } from './llm-trace/log';
 import { runCdmssPipeline, type OpdCdmss } from './cdmss-pipeline';
 import { generateStitchedNote, type StitchInputSession } from './stitch';
 
-const STALE_CLAIM_MINUTES = 30;
+// P5: Vercel functions die at maxDuration 300s — any claim older than ~5min
+// is definitionally stale. 8min (vs the old 30) means a killed run self-heals
+// on the NEXT trigger instead of stranding 'generating' for half an hour
+// (we manually reset that state three times during the P3 smoke).
+const STALE_CLAIM_MINUTES = 8;
 
 export type ProcessOutcome = {
   ok: boolean;
