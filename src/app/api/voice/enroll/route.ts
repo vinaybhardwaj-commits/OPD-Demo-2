@@ -43,5 +43,5 @@ export async function POST(req: NextRequest) {
 
   const res = await storeEnrollmentSession({ clinicianId, clips, capturedByAdminId: null });
   if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 502 });
-  return NextResponse.json({ ok: true, ...res });
+  return NextResponse.json({ ...res });
 }
