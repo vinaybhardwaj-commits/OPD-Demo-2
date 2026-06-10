@@ -29,6 +29,8 @@ type RoomCaptureValue = {
   setStream: (s: MediaStream | null) => void;
   emitChunk: (chunk: Blob) => void;
   subscribe: (fn: ChunkListener) => () => void;
+  /** P2.1: live engines' detected language (ref — read at fire time, no rerender). */
+  languageRef: React.MutableRefObject<string | null>;
 };
 
 const RoomCaptureContext = React.createContext<RoomCaptureValue | null>(null);
@@ -36,6 +38,7 @@ const RoomCaptureContext = React.createContext<RoomCaptureValue | null>(null);
 export function RoomCaptureProvider({ children }: { children: React.ReactNode }) {
   const [recording, setRecording] = React.useState(false);
   const [stream, setStream] = React.useState<MediaStream | null>(null);
+  const languageRef = React.useRef<string | null>(null);
   const listenersRef = React.useRef<Set<ChunkListener>>(new Set());
 
   const emitChunk = React.useCallback((chunk: Blob) => {
@@ -56,7 +59,7 @@ export function RoomCaptureProvider({ children }: { children: React.ReactNode })
   }, []);
 
   const value = React.useMemo(
-    () => ({ recording, setRecording, stream, setStream, emitChunk, subscribe }),
+    () => ({ recording, setRecording, stream, setStream, emitChunk, subscribe, languageRef }),
     [recording, stream, emitChunk, subscribe],
   );
 

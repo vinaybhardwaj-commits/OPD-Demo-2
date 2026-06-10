@@ -1914,6 +1914,33 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_voice_sample_source ON voice_sample(source);
     `,
   },
+  {
+    version: 42,
+    name: 'v7_2_session_transcripts',
+    sql: `
+      -- v7.2 / OPD-Demo-2 P2.1 — per-session pipeline outputs.
+      -- The session is the stitch unit (P3 reads these rows directly).
+      -- transcript_en = canonical English text (Whisper EN / Sarvam batch
+      -- translate non-EN); diarized_json = Sarvam diarization entries when
+      -- the batch path ran (pyannote tagging lands in P2.2).
+
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS transcript_en TEXT;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS transcript_original TEXT;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS detected_language TEXT;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS diarized_json JSONB;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS transcribed_at TIMESTAMPTZ;
+      ALTER TABLE encounter_sessions ADD COLUMN IF NOT EXISTS transcribe_error TEXT;
+
+      -- Pipeline claim/reap bookkeeping on the encounter (processing_status
+      -- itself landed in migration 40).
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ;
+      ALTER TABLE encounters ADD COLUMN IF NOT EXISTS processing_error TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_untranscribed
+        ON encounter_sessions (encounter_id)
+        WHERE status = 'uploaded' AND transcribed_at IS NULL;
+    `,
+  },
 ];
 
 /**

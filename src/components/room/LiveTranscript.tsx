@@ -151,6 +151,13 @@ export function LiveTranscript({ encounterId, speakerEnrolled }: Props) {
   const chip = CHIP[states[engine]] ?? CHIP.idle;
   const language = engine === 'sarvam' ? svRoll.language : engine === 'relay' ? svStream.language : null;
 
+  // P2.1: publish the detected language so RoomControls can pass it to the
+  // background pipeline at pause/end (relay's lock wins over rolling).
+  const detected = svStream.language ?? svRoll.language ?? null;
+  React.useEffect(() => {
+    if (capture) capture.languageRef.current = detected;
+  }, [capture, detected]);
+
   const dgEmpty = blocks.length === 0 && !openText && !interim;
   const tabBase = 'rounded-md px-2 py-0.5 transition-colors';
 

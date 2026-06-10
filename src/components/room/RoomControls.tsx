@@ -234,7 +234,24 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
         if (!uploaded) return; // hold the transition; doctor can retry
         setBusy(action);
       }
-      if (await lifecycle(action)) router.refresh();
+      const ok = await lifecycle(action);
+      if (ok) {
+        // P2.1: kick the background pipeline (fire-and-forget; the hourly
+        // sweep is the backstop). keepalive lets it outlive navigation.
+        if (action === 'pause_for_workup' || action === 'end_visit') {
+          try {
+            void fetch(`/api/encounters/${encounterId}/process`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ detected_language: capture?.languageRef.current ?? null }),
+              keepalive: true,
+            }).catch(() => { /* intentional: sweep backstop */ });
+          } catch {
+            /* intentional */
+          }
+        }
+        router.refresh();
+      }
     } catch {
       setError('network error');
     } finally {

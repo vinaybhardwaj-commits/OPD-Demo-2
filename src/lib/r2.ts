@@ -110,6 +110,28 @@ export async function headObject(
   }
 }
 
+/** Download an object's bytes (pipeline reads session audio). Null if missing. */
+export async function getObjectBytes(key: string): Promise<Uint8Array | null> {
+  try {
+    const res = await client().send(
+      new GetObjectCommand({ Bucket: bucket(), Key: key }),
+    );
+    if (!res.Body) return null;
+    type ByteStream = { transformToByteArray: () => Promise<Uint8Array> };
+    const stream = res.Body as unknown as ByteStream;
+    if (typeof stream.transformToByteArray === 'function') {
+      return await stream.transformToByteArray();
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of res.Body as unknown as AsyncIterable<Buffer>) {
+      chunks.push(chunk);
+    }
+    return new Uint8Array(Buffer.concat(chunks));
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteObject(key: string): Promise<void> {
   try {
     await client().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
