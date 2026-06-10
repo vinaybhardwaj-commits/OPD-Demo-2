@@ -66,6 +66,9 @@ export function SuggestedOrderChips({
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [cached, setCached] = useState(false);
+  // D.4: no cached suggestions → render a button; qwen fires ONLY on click.
+  const [noCached, setNoCached] = useState(false);
+  const [fireSeq, setFireSeq] = useState(0); // >0 = doctor asked for a fresh run
 
   // v6.0 Phase 2D — TracePanel state. Renders only when the server
   // returns NDJSON (i.e. the cache missed and qwen had to fire).
@@ -77,7 +80,13 @@ export function SuggestedOrderChips({
     let cancel = false;
     (async () => {
       try {
-        const res = await fetch(`/api/encounters/${encounterId}/suggest-orders`, {
+        // D.4 trigger model: mount = cache-only read (never fires qwen);
+        // fireSeq>0 = the doctor clicked ✨ — full run with live trace.
+        const url = fireSeq > 0
+          ? `/api/encounters/${encounterId}/suggest-orders`
+          : `/api/encounters/${encounterId}/suggest-orders?cache_only=1`;
+        if (fireSeq > 0) { setLoading(true); setNoCached(false); setTraceEvents([]); setTraceTotalMs(undefined); }
+        const res = await fetch(url, {
           headers: { Accept: 'application/x-ndjson' },
         });
         if (!res.ok) {
@@ -103,9 +112,15 @@ export function SuggestedOrderChips({
               resultRef.current = ev.data as ResultBody;
             } else if (ev.type === 'done') {
               setTraceTotalMs(ev.ms);
-              setTraceEvents((prev) => [...prev, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }]);
+              setTraceEvents((prev) => {
+                const next = prev.map((p, i) => (i === prev.length - 1 && !p.done ? { ...p, done: true } : p));
+                return [...next, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }];
+              });
             } else if (ev.type === 'error') {
-              setTraceEvents((prev) => [...prev, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }]);
+              setTraceEvents((prev) => {
+                const next = prev.map((p, i) => (i === prev.length - 1 && !p.done ? { ...p, done: true } : p));
+                return [...next, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }];
+              });
             }
           });
           if (cancel) return;
@@ -118,8 +133,12 @@ export function SuggestedOrderChips({
           // Plain JSON cache-hit path.
           const json = await res.json();
           if (!cancel && json.ok) {
-            setPayload(json.payload);
-            setCached(json.cached);
+            if (json.no_cached) {
+              setNoCached(true);
+            } else {
+              setPayload(json.payload);
+              setCached(json.cached);
+            }
           }
         }
       } finally {
@@ -127,7 +146,7 @@ export function SuggestedOrderChips({
       }
     })();
     return () => { cancel = true; };
-  }, [encounterId]);
+  }, [encounterId, fireSeq]);
 
   if (loading) {
     // Show the TracePanel only if we've started receiving NDJSON events
@@ -153,6 +172,19 @@ export function SuggestedOrderChips({
     );
   }
 
+  if (noCached) {
+    // D.4: nothing cached — offer the run instead of firing it uninvited.
+    return (
+      <button
+        type="button"
+        onClick={() => setFireSeq((n) => n + 1)}
+        className="rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700 hover:bg-violet-100"
+        title="Ask the reasoning model for likely orders given this presentation — runs only when you click"
+      >
+        ✨ Suggest orders (AI)
+      </button>
+    );
+  }
   if (!payload || payload.status === 'failed') {
     return null; // Silent failure per PRD §6.A
   }

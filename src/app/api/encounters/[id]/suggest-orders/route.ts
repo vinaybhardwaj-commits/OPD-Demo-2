@@ -161,6 +161,16 @@ export async function GET(
       return NextResponse.json({ ok: true, cached: true, payload: enc.ai_suggested_orders });
     }
 
+    // D.4 (V, 10 Jun): ?cache_only=1 — opening the Diagnostics workspace
+    // must NEVER fire qwen. Stale cache is still shown (marked); fresh runs
+    // come only from the doctor's button.
+    if (new URL(req.url).searchParams.get('cache_only') === '1') {
+      if (enc.ai_suggested_orders) {
+        return NextResponse.json({ ok: true, cached: true, stale: true, payload: enc.ai_suggested_orders });
+      }
+      return NextResponse.json({ ok: true, cached: false, no_cached: true, payload: null });
+    }
+
     // v6.0 Phase 2D — Accept-header branch. NDJSON path emits progress
     // events while we build catalog + retrieve KB + fire qwen; JSON path
     // (legacy) runs the same logic with a no-op emit.
