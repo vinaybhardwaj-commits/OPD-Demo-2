@@ -61,14 +61,31 @@ export async function POST(
     );
   }
 
+  // P4.1 — finalize walks the clinical track too (design §2):
+  // ready_for_review → 'finalizing' while an untranscribed final-counselling
+  // session is pending (the pipeline flips finalizing→complete when its
+  // faithful transcript lands — NO review gate), else straight → 'complete'.
+  const { rows: pend } = await pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM encounter_sessions
+      WHERE encounter_id = $1 AND phase = 'final_disposition' AND transcribed_at IS NULL
+        AND status IN ('recording', 'uploaded')`,
+    [id],
+  );
+  const counsellingPending = parseInt(pend[0]?.n ?? '0', 10) > 0;
+
   const { rows: upd } = await pool.query<{ room_id: string | null }>(
     `UPDATE encounters
-     SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+     SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+         clinical_status = CASE
+           WHEN clinical_status IN ('ready_for_review', 'processing', 'in_room')
+             THEN CASE WHEN $2::boolean THEN 'finalizing' ELSE 'complete' END
+           ELSE clinical_status END,
+         current_phase = 'finalizing'
      WHERE id = $1
      RETURNING room_id`,
-    [id],
+    [id, counsellingPending],
   );
   await notifyRoom(upd[0]?.room_id ?? null, `completed:${id}`);
 
-  return NextResponse.json({ ok: true, encounter_id: id });
+  return NextResponse.json({ ok: true, encounter_id: id, counselling_pending: counsellingPending });
 }

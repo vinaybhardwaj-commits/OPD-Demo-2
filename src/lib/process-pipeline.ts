@@ -254,6 +254,8 @@ export async function processEncounter(
 
   // P2.4 — flip the board card to the Review queue (design §4): only on the
   // end-visit path (clinical 'processing'), only when the pipeline is clean.
+  // P4.2 — and finalizing → complete once the final-counselling transcript
+  // has landed (faithful, no review gate — design principle 4).
   if (finalStatus === 'ready') {
     await pool.query(
       `UPDATE encounters
@@ -261,6 +263,16 @@ export async function processEncounter(
         WHERE id = $1 AND clinical_status = 'processing'`,
       [encounterId],
     ).catch(() => { /* intentional: flip is choreography, not data integrity */ });
+    await pool.query(
+      `UPDATE encounters
+          SET clinical_status = 'complete', updated_at = NOW()
+        WHERE id = $1 AND clinical_status = 'finalizing'
+          AND NOT EXISTS (
+            SELECT 1 FROM encounter_sessions
+             WHERE encounter_id = $1 AND transcribed_at IS NULL
+               AND status IN ('recording', 'uploaded'))`,
+      [encounterId],
+    ).catch(() => { /* intentional: flip is choreography */ });
   }
 
   return {
@@ -448,6 +460,7 @@ async function generateNotes(
          FROM encounter_sessions
         WHERE encounter_id = $1
           AND transcribed_at IS NOT NULL
+          AND phase <> 'final_disposition' -- P4.2: counselling is faithful-only, never drafted
           AND (note_generated_at IS NULL OR $2::boolean)
         ORDER BY seq ASC`,
       [encounterId, force],
@@ -517,6 +530,7 @@ async function generateNotes(
                 note_json, tagged_transcript, transcript_en
            FROM encounter_sessions
           WHERE encounter_id = $1 AND transcribed_at IS NOT NULL
+            AND phase <> 'final_disposition' -- P4.2: never stitched
           ORDER BY seq ASC`,
         [encounterId],
       );
@@ -834,7 +848,8 @@ export async function findUnprocessedEncounters(limit: number): Promise<string[]
       WHERE s.audio_object_key IS NOT NULL
         AND ((s.status = 'uploaded' AND s.transcribed_at IS NULL)
              OR (s.transcribed_at IS NOT NULL AND s.diarized_at IS NULL)
-             OR (s.transcribed_at IS NOT NULL AND s.note_generated_at IS NULL)
+             OR (s.transcribed_at IS NOT NULL AND s.note_generated_at IS NULL
+                 AND s.phase <> 'final_disposition')
              OR (e.note_json IS NOT NULL AND e.cdmss_generated_at IS NULL))
         AND (e.processing_status NOT IN ('transcribing', 'generating')
              OR e.processing_started_at < NOW() - make_interval(mins => ${STALE_CLAIM_MINUTES}))

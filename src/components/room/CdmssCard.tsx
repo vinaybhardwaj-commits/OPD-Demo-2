@@ -9,6 +9,7 @@
  * (accept there will also instantiate plans; here it records the decision).
  */
 import * as React from 'react';
+import { useRouter } from 'next/navigation';
 
 type Cited = { cites?: number[] };
 type WhatToDo = Cited & { kind: string; summary: string; reasoning: string };
@@ -66,6 +67,8 @@ export function CdmssCard({
     Object.fromEntries(items.map((i) => [i.id, i.status])),
   );
   const [busy, setBusy] = React.useState<string | null>(null);
+  const [routedNote, setRoutedNote] = React.useState<string | null>(null);
+  const router = useRouter();
   const [showAdvisory, setShowAdvisory] = React.useState(false);
   const [showSources, setShowSources] = React.useState(false);
 
@@ -77,8 +80,26 @@ export function CdmssCard({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
       });
-      const j = (await res.json()) as { ok?: boolean; status?: string };
-      if (j.ok && j.status) setStatuses((s) => ({ ...s, [itemId]: j.status! }));
+      const j = (await res.json()) as { ok?: boolean; status?: string; routed?: string | null; undo?: string | null };
+      if (j.ok && j.status) {
+        setStatuses((s) => ({ ...s, [itemId]: j.status! }));
+        if (j.routed && !j.routed.startsWith('route_failed')) {
+          setRoutedNote(
+            j.routed.startsWith('plan:') ? `Added an unsubmitted ${j.routed.slice(5).replace(/_/g, ' ')} plan — review it in section 7.`
+            : j.routed.startsWith('rx_line') ? 'Added to the prescription — review it in Treatment.'
+            : j.routed === 'assessment_append' ? 'Appended to Assessment.' : null,
+          );
+        } else if (j.undo) {
+          setRoutedNote(
+            j.undo === 'plan_removed' ? 'Linked plan removed.'
+            : j.undo === 'rx_line_kept_remove_in_composer' ? 'Decision reset — remove the Rx line in Treatment if unwanted.'
+            : j.undo === 'assessment_append_kept_edit_inline' ? 'Decision reset — edit the Assessment text if unwanted.' : null,
+          );
+        }
+        // P4.1: routed accepts create plan rows / Rx lines / assessment text —
+        // refresh the server-rendered surface so the editor sections pick them up.
+        router.refresh();
+      }
     } catch {
       /* intentional: leave the row as-is; doctor can retry */
     } finally {
@@ -158,6 +179,11 @@ export function CdmssCard({
           advisory — your disposition never waits on this
         </span>
       </div>
+      {routedNote ? (
+        <p className="mt-2 rounded-md bg-violet-100/70 px-2 py-1 text-[11px] text-violet-800">
+          {routedNote}
+        </p>
+      ) : null}
 
       {todo.length > 0 && (
         <div className="mt-3">

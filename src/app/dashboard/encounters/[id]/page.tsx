@@ -11,6 +11,8 @@ import { notFound, redirect } from 'next/navigation';
 import { pool } from '@/lib/db';
 import { getCurrentDoctor } from '@/lib/auth';
 import { EncounterEditor, type EncounterEditable } from '@/components/EncounterEditor';
+import { CdmssCard, type CdmssPayload, type CdmssItemRow } from '@/components/room/CdmssCard';
+import { CounsellingCapture } from '@/components/CounsellingCapture';
 import { AskTheChartRail } from '@/components/AskTheChartRail';
 import { EncounterTopBar } from '@/components/encounter/EncounterTopBar';
 import { PatientContextStrip } from '@/components/encounter/PatientContextStrip';
@@ -93,6 +95,9 @@ export default async function EncounterPage({
        e.patient_id,
        e.encounter_number,
        e.status::text AS status,
+       e.clinical_status,
+       e.cdmss_json,
+       e.cdmss_error,
        e.started_at,
        e.active_ms_accumulated,
        e.active_since::text AS active_since,
@@ -220,6 +225,30 @@ export default async function EncounterPage({
   // + last 5 completed encounters. Cheap, runs in parallel-ish with
   // the prescription fetch (network round-trip dominates).
   const panelData = await loadHistoryPanelData(row.patient_id, id);
+
+  // P4.1 — CDMSS item rows for the violet review card (accept/ignore state).
+  const { rows: cdmssItemRows } = await pool.query(
+    `SELECT id, item_group, payload, status
+       FROM encounter_cdmss_items
+      WHERE encounter_id = $1
+      ORDER BY created_at ASC`,
+    [id],
+  );
+  const cdmssItems = cdmssItemRows as CdmssItemRow[];
+
+  // P4.2 — final-counselling sessions (faithful transcripts, no review gate).
+  const { rows: counselling } = await pool.query<{
+    seq: number;
+    transcript_en: string | null;
+    transcribe_error: string | null;
+    started_at: string | null;
+  }>(
+    `SELECT seq, transcript_en, transcribe_error, started_at::text AS started_at
+       FROM encounter_sessions
+      WHERE encounter_id = $1 AND phase = 'final_disposition'
+      ORDER BY seq ASC`,
+    [id],
+  );
   // Polish #3 — lab trends for the HistoryPanel. Cheap single query.
   const labTrends = await loadLabTrends(row.patient_id);
   const prescriptionMeta = rx
@@ -309,6 +338,60 @@ export default async function EncounterPage({
             fromDoctorName={row.prev_owner_name}
             flaggedAt={row.handoff_flagged_at}
           />
+        )}
+
+        {/* P4.1 — Review surface (Surface C): banner + the violet CDMSS card.
+            The board's Review-lane card lands here; accepts smart-route into
+            plans (section 7), the Rx composer, and the Assessment. */}
+        {row.clinical_status === 'ready_for_review' && (
+          <div className="mb-4 rounded-xl border border-violet-300 bg-violet-50 px-4 py-3">
+            <p className="text-sm font-semibold text-violet-800">
+              📋 Background note ready for review
+            </p>
+            <p className="mt-0.5 text-xs text-violet-700">
+              The recording was transcribed, speaker-tagged, and drafted into the sections below
+              (your typed text was never overwritten). Review the AI suggestions, then
+              Submit &amp; finish to finalize the encounter.
+            </p>
+          </div>
+        )}
+        {row.cdmss_json ? (
+          <div className="mb-6">
+            <CdmssCard
+              encounterId={row.id}
+              cdmss={row.cdmss_json as CdmssPayload}
+              items={cdmssItems}
+            />
+          </div>
+        ) : row.cdmss_error && row.clinical_status === 'ready_for_review' ? (
+          <p className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            AI suggestions unavailable ({String(row.cdmss_error).slice(0, 60)}…) — the hourly sweep retries. Review and finalize as usual.
+          </p>
+        ) : null}
+
+        {/* P4.2 — final counselling: optional capture + faithful transcripts */}
+        {(row.clinical_status === 'ready_for_review' || row.clinical_status === 'finalizing' || row.clinical_status === 'complete') && (
+          <div className="mb-6 space-y-2">
+            <CounsellingCapture encounterId={row.id} />
+            {counselling.map((c) =>
+              c.transcript_en ? (
+                <div key={c.seq} className="rounded-xl border border-even-ink-200 bg-even-ink-50/40 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-even-ink-500">
+                    Final counselling — faithful transcript (session #{c.seq})
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-even-ink-800">{c.transcript_en}</p>
+                </div>
+              ) : c.transcribe_error ? (
+                <p key={c.seq} className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
+                  Counselling transcript pending retry ({c.transcribe_error.slice(0, 50)}…) — the hourly sweep self-heals.
+                </p>
+              ) : (
+                <p key={c.seq} className="rounded-xl border border-even-ink-200 bg-white p-2 text-[11px] text-even-ink-500">
+                  Counselling session #{c.seq} — transcribing in the background…
+                </p>
+              ),
+            )}
+          </div>
         )}
 
         {/* v2.1.5 — doctor-side lab orders + results panel. */}
