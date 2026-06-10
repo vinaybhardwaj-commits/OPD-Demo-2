@@ -37,7 +37,6 @@ import { CommandPalette, type CommandAction } from './encounter/CommandPalette';
 import { PausedDiagnosticsBanner } from './encounter/PausedDiagnosticsBanner';
 import { AmbientRecorder } from './AmbientRecorder';
 import { TranscriptViewer, type TranscriptViewerHandle } from './TranscriptViewer';
-import { SendToDiagnosticsModal } from './SendToDiagnosticsModal';
 import { DiagnosticOrderModal } from './DiagnosticOrderModal';
 import { SubmitConfirmModal } from './SubmitConfirmModal';
 import { FlagHandoffModal } from './FlagHandoffModal';
@@ -196,7 +195,6 @@ export function EncounterEditor({
   const submitGated = initial.status === 'paused_diagnostics';
   const canSendToDiagnostics =
     initial.status === 'active' || initial.status === 'ready_to_resume';
-  const [diagModalOpen, setDiagModalOpen] = useState(false);
   const [labModalOpen, setLabModalOpen] = useState(false);
   const [handoffModalOpen, setHandoffModalOpen] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -818,9 +816,9 @@ export function EncounterEditor({
                   type="button"
                   onClick={() => setLabModalOpen(true)}
                   className="rounded-lg border border-even-blue-300 bg-white px-4 py-2.5 text-sm font-semibold text-even-blue-800 transition hover:bg-even-blue-50"
-                  title="Roomier diagnostic-ordering workspace — all modalities, shares state with the inline strip"
+                  title="Order ANY diagnostic — blood work, imaging, cardiology, procedures. One workspace, full catalog, smart search; syncs with the inline strip."
                 >
-                  Diagnostics workspace
+                  🧪 Diagnostics — labs &amp; imaging
                 </button>
               )}
               {canSendToDiagnostics && (
@@ -833,16 +831,9 @@ export function EncounterEditor({
                   Flag for handoff
                 </button>
               )}
-              {canSendToDiagnostics && (
-                <button
-                  type="button"
-                  onClick={() => setDiagModalOpen(true)}
-                  className="rounded-lg border border-even-pink-300 bg-white px-4 py-2.5 text-sm font-semibold text-even-pink-800 transition hover:bg-even-pink-50"
-                  title="Imaging / radiology (CXR, ECG, USG, Echo)"
-                >
-                  Imaging
-                </button>
-              )}
+              {/* D.6 (V, 10 Jun): the legacy quick-send 'Imaging' modal is retired —
+                  the Diagnostics workspace is the single entry for every modality
+                  (labs, imaging, cardiology, procedures, and whatever we add next). */}
               <button
                 type="button"
                 onClick={onSubmit}
@@ -867,13 +858,6 @@ export function EncounterEditor({
           setCoherenceModalOpen(false);
           setConfirmModalOpen(true);
         }}
-      />
-
-      <SendToDiagnosticsModal
-        encounterId={initial.id}
-        patientName={patient.name}
-        open={diagModalOpen}
-        onClose={() => setDiagModalOpen(false)}
       />
 
       <DiagnosticOrderModal
