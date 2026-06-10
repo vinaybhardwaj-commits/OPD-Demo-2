@@ -215,9 +215,21 @@ export function DictateButton({
           resultRef.current = ev.data as DictResult;
         } else if (ev.type === 'done') {
           setTraceTotalMs(ev.ms);
-          setTraceEvents((prev) => [...prev, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }]);
+          setTraceEvents((prev) => {
+            // Terminal event must also close the last in-progress step —
+            // otherwise the final stage (judge/drafting) spins forever.
+            const next = prev.map((p, i) =>
+              i === prev.length - 1 && !p.done ? { ...p, done: true } : p,
+            );
+            return [...next, { stage: 'done', msg: '', ms: ev.ms, done: true, ts: Date.now() }];
+          });
         } else if (ev.type === 'error') {
-          setTraceEvents((prev) => [...prev, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }]);
+          setTraceEvents((prev) => {
+            const next = prev.map((p, i) =>
+              i === prev.length - 1 && !p.done ? { ...p, done: true } : p,
+            );
+            return [...next, { stage: 'done', msg: ev.message, done: true, error: true, ts: Date.now() }];
+          });
         }
       });
       const j = resultRef.current;
