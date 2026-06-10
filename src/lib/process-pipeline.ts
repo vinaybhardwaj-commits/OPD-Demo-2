@@ -381,9 +381,7 @@ async function generateNotes(
                 WHERE encounter_id = $1 AND transcript_en IS NOT NULL ORDER BY seq ASC`,
               [encounterId],
             );
-            return tx.map((t) => t.transcript_en ?? '').join('
-
-');
+            return tx.map((t) => t.transcript_en ?? '').join('\n\n');
           })());
         if (fullText.trim().length > 0) {
           const trace = await openTrace({
