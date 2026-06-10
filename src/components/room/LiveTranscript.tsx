@@ -1,93 +1,156 @@
 'use client';
 
 /**
- * LiveTranscript — the Room's center rail, P1.3 (Deepgram live).
+ * LiveTranscript — the Room's center rail. P1.3 Deepgram · P1.4 all-parallel.
  *
- * Locked decisions (10 Jun 2026):
- *   - HYBRID rail UX: rolling text within an utterance block; a NEW block
- *     starts on a speech pause (Deepgram speech_final). Blocks are the
- *     future anchor for speaker pills (P1.6 voiceprints / P2 diarize).
- *   - Interims SHOWN, styled lighter (muted italic tail, replaced on final).
- *   - Deepgram-only for P1.3; engine selector SHELL visible with Sarvam +
- *     relay greyed out — P1.4 wires them in.
+ * Locked decisions:
+ *   P1.3 (10 Jun): HYBRID rail (rolling text within an utterance block, new
+ *     block on Deepgram speech_final) · interims shown muted-italic.
+ *   P1.4 (10 Jun): ALL-PARALLEL like ETA — every engine runs on every
+ *     recording; the selector only switches which TRACE is displayed ·
+ *     NO mid-session switching (selector disabled while a session is live) ·
+ *     per-utterance LLM cleanup ported (Deepgram finals, llama3.1:8b,
+ *     soft-fail to raw).
  *
- * Audio comes off the RoomCapture bus (RoomControls owns the recorder).
- * The WS opens when a capture session starts and closes when it ends;
- * it stays open across Mute (KeepAlive in the hook covers idle).
+ * Engines (all fed from the RoomCapture bus / mic stream):
+ *   deepgram — WS, en-IN medical, hybrid blocks (P1.3)
+ *   sarvam   — REST rolling refine+commit, codemix, ~2s tail refresh
+ *   relay    — Sarvam streaming WS via Mac Mini relay, sub-second; iOS and
+ *              (flag-gated) desktop-Safari skip the worklet (B18 lesson)
  */
 import * as React from 'react';
 import { useDeepgramLive, type LiveUtterance } from '@/lib/use-deepgram-live';
+import { useSarvamRolling } from '@/lib/use-sarvam-rolling';
+import { useSarvamStreaming } from '@/lib/use-sarvam-streaming';
+import { useUtteranceCleanup } from '@/lib/use-utterance-cleanup';
 import { useRoomCapture } from '@/components/room/RoomCapture';
+import { detectIOS, detectDesktopSafari } from '@/lib/platform';
 
-type Block = {
-  id: number;
-  text: string;
-};
+type Engine = 'deepgram' | 'sarvam' | 'relay';
+
+type Seg = { uid: string; text: string };
+type Block = { id: number; segs: Seg[] };
 
 type Props = {
   encounterId: string;
 };
 
-const STATE_CHIP: Record<string, { label: string; cls: string }> = {
+const SAFARI_STREAMING_GUARD = process.env.NEXT_PUBLIC_OPD2_SAFARI_STREAMING_GUARD === '1';
+
+const CHIP: Record<string, { label: string; cls: string }> = {
   idle: { label: 'idle', cls: 'bg-even-ink-100 text-even-ink-500' },
   connecting: { label: 'connecting…', cls: 'bg-amber-100 text-amber-800' },
   open: { label: 'live', cls: 'bg-emerald-100 text-emerald-800' },
+  live: { label: 'live', cls: 'bg-emerald-100 text-emerald-800' },
+  listening: { label: 'listening', cls: 'bg-emerald-100 text-emerald-800' },
+  running: { label: 'live', cls: 'bg-emerald-100 text-emerald-800' },
+  in_flight: { label: 'live', cls: 'bg-emerald-100 text-emerald-800' },
   closed: { label: 'closed', cls: 'bg-even-ink-100 text-even-ink-500' },
+  stopped: { label: 'stopped', cls: 'bg-even-ink-100 text-even-ink-500' },
   error: { label: 'error', cls: 'bg-red-100 text-red-700' },
+  unavailable: { label: 'unavailable here', cls: 'bg-even-ink-100 text-even-ink-400' },
 };
 
 export function LiveTranscript({ encounterId }: Props) {
   const capture = useRoomCapture();
   const recording = capture?.recording ?? false;
+  const stream = capture?.stream ?? null;
 
-  // Closed blocks + the open block's finalized text + the interim tail.
+  // Which trace is DISPLAYED (all engines run regardless). Locked while a
+  // session is live (no mid-session switching).
+  const [engine, setEngine] = React.useState<Engine>('deepgram');
+
+  // ---- Deepgram trace: hybrid blocks of cleanable segments -----------------
   const [blocks, setBlocks] = React.useState<Block[]>([]);
-  const [openText, setOpenText] = React.useState('');
+  const [openSegs, setOpenSegs] = React.useState<Seg[]>([]);
   const [interim, setInterim] = React.useState('');
   const blockIdRef = React.useRef(0);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
-  const onFinal = React.useCallback((u: LiveUtterance) => {
-    setInterim('');
-    setOpenText((prev) => {
-      const joined = prev ? `${prev} ${u.text}` : u.text;
-      if (u.speech_final) {
-        // Close the block on the speech pause — hybrid rail UX.
-        blockIdRef.current += 1;
-        const id = blockIdRef.current;
-        setBlocks((bs) => [...bs, { id, text: joined }]);
-        return '';
-      }
-      return joined;
-    });
-  }, []);
+  // Per-utterance LLM cleanup (llama3.1:8b) — cleaned text silently replaces
+  // raw as it arrives; soft-fail keeps raw.
+  const cleanup = useUtteranceCleanup({ enabled: true, concurrency: 2 });
+  const enqueueCleanup = cleanup.enqueue;
+
+  const onFinal = React.useCallback(
+    (u: LiveUtterance) => {
+      setInterim('');
+      enqueueCleanup(u.id, u.text);
+      setOpenSegs((prev) => {
+        const next = [...prev, { uid: u.id, text: u.text }];
+        if (u.speech_final) {
+          blockIdRef.current += 1;
+          const id = blockIdRef.current;
+          setBlocks((bs) => [...bs, { id, segs: next }]);
+          return [];
+        }
+        return next;
+      });
+    },
+    [enqueueCleanup],
+  );
 
   const onInterim = React.useCallback((u: LiveUtterance) => {
     setInterim(u.text);
   }, []);
 
-  const dg = useDeepgramLive({
-    enabled: recording,
-    encounterId,
-    onFinal,
-    onInterim,
+  const dg = useDeepgramLive({ enabled: recording, encounterId, onFinal, onInterim });
+
+  // ---- Sarvam rolling trace (REST refine+commit, codemix) ------------------
+  const svRoll = useSarvamRolling({ enabled: recording, encounterId, intervalMs: 2_000 });
+
+  // ---- Sarvam streaming trace (relay WS) -----------------------------------
+  // iOS: the worklet starves MediaRecorder (no_audio_chunks); desktop Safari
+  // shares the dual-consumer risk behind a flag. Resolved post-mount so SSR
+  // and hydration stay consistent.
+  const RELAY_URL = process.env.NEXT_PUBLIC_STT_RELAY_URL || null;
+  const [blockStreaming, setBlockStreaming] = React.useState(false);
+  React.useEffect(() => {
+    setBlockStreaming(detectIOS() || (SAFARI_STREAMING_GUARD && detectDesktopSafari()));
+  }, []);
+  const streamingAvailable = !!RELAY_URL && !blockStreaming;
+  const svStream = useSarvamStreaming({
+    enabled: recording && streamingAvailable,
+    stream,
+    relayUrl: RELAY_URL,
   });
 
-  // Pipe recorder chunks into the WS.
-  const sendChunk = dg.sendChunk;
+  // Pipe recorder chunks to the chunk-fed engines (relay taps the raw stream).
+  const dgSend = dg.sendChunk;
+  const svSend = svRoll.sendChunk;
   React.useEffect(() => {
     if (!capture) return;
-    return capture.subscribe(sendChunk);
-  }, [capture, sendChunk]);
+    return capture.subscribe((chunk: Blob) => {
+      dgSend(chunk);
+      svSend(chunk);
+    });
+  }, [capture, dgSend, svSend]);
 
-  // Auto-scroll to the tail as text arrives.
+  // Auto-scroll the displayed trace.
   React.useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [blocks, openText, interim]);
+  }, [engine, blocks, openSegs, interim, svRoll.text, svStream.text]);
 
-  const chip = STATE_CHIP[dg.state] ?? STATE_CHIP.idle;
-  const empty = blocks.length === 0 && !openText && !interim;
+  const segText = (s: Seg) => cleanup.cleanedById[s.uid] ?? s.text;
+  const blockText = (b: Block) => b.segs.map(segText).join(' ');
+  const openText = openSegs.map(segText).join(' ');
+
+  const states: Record<Engine, string> = {
+    deepgram: dg.state,
+    sarvam: svRoll.state,
+    relay: streamingAvailable ? svStream.state : 'unavailable',
+  };
+  const errors: Record<Engine, string | null> = {
+    deepgram: dg.state === 'error' ? dg.error : null,
+    sarvam: svRoll.state === 'error' ? svRoll.error : null,
+    relay: streamingAvailable && svStream.state === 'error' ? svStream.error : null,
+  };
+  const chip = CHIP[states[engine]] ?? CHIP.idle;
+  const language = engine === 'sarvam' ? svRoll.language : engine === 'relay' ? svStream.language : null;
+
+  const dgEmpty = blocks.length === 0 && !openText && !interim;
+  const tabBase = 'rounded-md px-2 py-0.5 transition-colors';
 
   return (
     <section className="flex max-h-[75vh] flex-col rounded-xl border border-even-ink-200 bg-white p-4">
@@ -98,55 +161,102 @@ export function LiveTranscript({ encounterId }: Props) {
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${chip.cls}`}>
           {chip.label}
         </span>
-        {/* Engine selector shell — Deepgram live now; Sarvam + relay land in P1.4 */}
-        <div className="ml-auto flex items-center gap-1 rounded-lg bg-even-ink-50 p-0.5 text-[10px]">
-          <span className="rounded-md bg-white px-2 py-0.5 font-semibold text-even-navy-800 shadow-sm">
-            Deepgram
+        {language ? (
+          <span className="rounded-full bg-even-blue-50 px-2 py-0.5 font-mono text-[10px] text-even-blue-700">
+            {language}
           </span>
-          <span className="cursor-not-allowed px-2 py-0.5 text-even-ink-300" title="P1.4">
-            Sarvam
-          </span>
-          <span className="cursor-not-allowed px-2 py-0.5 text-even-ink-300" title="P1.4">
-            Relay
-          </span>
+        ) : null}
+        {/* Display selector — all engines run in parallel; this only switches
+            the visible trace. Locked while a session is live. */}
+        <div
+          className={`ml-auto flex items-center gap-1 rounded-lg bg-even-ink-50 p-0.5 text-[10px] ${recording ? 'opacity-70' : ''}`}
+          title={recording ? 'Engine view locked while recording' : 'Switch displayed engine'}
+        >
+          {(['deepgram', 'sarvam', 'relay'] as Engine[]).map((e) => (
+            <button
+              key={e}
+              onClick={() => setEngine(e)}
+              disabled={recording}
+              className={`${tabBase} ${
+                engine === e
+                  ? 'bg-white font-semibold text-even-navy-800 shadow-sm'
+                  : 'text-even-ink-400 hover:text-even-ink-600'
+              } ${recording ? 'cursor-not-allowed' : ''}`}
+            >
+              {e === 'deepgram' ? 'Deepgram' : e === 'sarvam' ? 'Sarvam' : 'Relay'}
+            </button>
+          ))}
         </div>
       </div>
 
-      {dg.state === 'error' && dg.error ? (
+      {errors[engine] ? (
         <p className="mt-2 text-xs text-red-600">
-          Live transcription unavailable ({dg.error}) — recording is unaffected; the full audio
-          still uploads on Pause/End.
+          {engine === 'relay'
+            ? `Relay stream unavailable (${errors[engine]}) — the Sarvam trace keeps running in parallel.`
+            : `Live transcription unavailable (${errors[engine]}) — recording is unaffected; the full audio still uploads on Pause/End.`}
+        </p>
+      ) : null}
+      {engine === 'relay' && !streamingAvailable ? (
+        <p className="mt-2 text-xs text-even-ink-400">
+          {RELAY_URL
+            ? 'Streaming is skipped on this device (worklet vs MediaRecorder mic contention) — see the Sarvam trace.'
+            : 'No relay configured (NEXT_PUBLIC_STT_RELAY_URL) — see the Sarvam trace.'}
         </p>
       ) : null}
 
       <div ref={scrollRef} className="mt-3 flex-1 space-y-2 overflow-y-auto pr-1">
-        {empty ? (
-          <p className="text-xs text-even-ink-400">
-            {recording
-              ? 'Listening…'
-              : 'Start recording to see the live transcript. Speaker labels arrive with voiceprints (P1.6).'}
+        {engine === 'deepgram' ? (
+          dgEmpty ? (
+            <Empty recording={recording} />
+          ) : (
+            <>
+              {blocks.map((b) => (
+                <p
+                  key={b.id}
+                  className="rounded-lg bg-even-ink-50/60 px-2.5 py-1.5 text-sm leading-relaxed text-even-ink-800"
+                >
+                  {blockText(b)}
+                </p>
+              ))}
+              {openText || interim ? (
+                <p className="rounded-lg border border-dashed border-even-ink-200 px-2.5 py-1.5 text-sm leading-relaxed text-even-ink-800">
+                  {openText}
+                  {interim ? (
+                    <span className="italic text-even-ink-400">
+                      {openText ? ' ' : ''}
+                      {interim}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+            </>
+          )
+        ) : engine === 'sarvam' ? (
+          svRoll.text ? (
+            <p className="whitespace-pre-wrap rounded-lg bg-even-ink-50/60 px-2.5 py-1.5 text-sm leading-relaxed text-even-ink-800">
+              {svRoll.text}
+            </p>
+          ) : (
+            <Empty recording={recording} />
+          )
+        ) : svStream.text ? (
+          <p className="whitespace-pre-wrap rounded-lg bg-even-ink-50/60 px-2.5 py-1.5 text-sm leading-relaxed text-even-ink-800">
+            {svStream.text}
           </p>
         ) : (
-          <>
-            {blocks.map((b) => (
-              <p key={b.id} className="rounded-lg bg-even-ink-50/60 px-2.5 py-1.5 text-sm leading-relaxed text-even-ink-800">
-                {b.text}
-              </p>
-            ))}
-            {openText || interim ? (
-              <p className="rounded-lg border border-dashed border-even-ink-200 px-2.5 py-1.5 text-sm leading-relaxed text-even-ink-800">
-                {openText}
-                {interim ? (
-                  <span className="italic text-even-ink-400">
-                    {openText ? ' ' : ''}
-                    {interim}
-                  </span>
-                ) : null}
-              </p>
-            ) : null}
-          </>
+          <Empty recording={recording} />
         )}
       </div>
     </section>
+  );
+}
+
+function Empty({ recording }: { recording: boolean }) {
+  return (
+    <p className="text-xs text-even-ink-400">
+      {recording
+        ? 'Listening…'
+        : 'Start recording to see the live transcript. All engines run in parallel — switch the view above between sessions. Speaker labels arrive with voiceprints (P1.6).'}
+    </p>
   );
 }

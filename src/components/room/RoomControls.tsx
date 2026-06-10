@@ -51,6 +51,9 @@ export function RoomControls({ encounterId, clinicalStatus, openSessionSeq }: Pr
 
   const rec = useMediaRecorder({
     chunkMs: 250,
+    // P1.4: mirror the live mic stream onto the bus (Sarvam streaming relay
+    // taps it via a pcm16 worklet; MediaRecorder keeps sole chunk ownership).
+    onStream: (s) => capture?.setStream(s),
     onChunk: (blob, idx) => {
       if (openSessionSeq == null) return;
       const key = storeKey(encounterId, openSessionSeq);

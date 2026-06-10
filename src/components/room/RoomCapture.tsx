@@ -11,6 +11,8 @@
  *     upstream in use-media-recorder — muted audio never reaches here)
  *   - setRecording(bool): whether a capture session is live (recording
  *     OR paused — the WS stays open across Mute; KeepAlive covers the gap)
+ *   - setStream(MediaStream|null): the live mic stream (P1.4 — feeds the
+ *     Sarvam streaming relay's pcm16 worklet; null when recording stops)
  *
  * Subscribers (the Deepgram hook) get chunks via subscribe(). Chunks are
  * NOT buffered here — durability is IndexedDB + the in-memory failsafe in
@@ -23,6 +25,8 @@ type ChunkListener = (chunk: Blob) => void;
 type RoomCaptureValue = {
   recording: boolean;
   setRecording: (r: boolean) => void;
+  stream: MediaStream | null;
+  setStream: (s: MediaStream | null) => void;
   emitChunk: (chunk: Blob) => void;
   subscribe: (fn: ChunkListener) => () => void;
 };
@@ -31,6 +35,7 @@ const RoomCaptureContext = React.createContext<RoomCaptureValue | null>(null);
 
 export function RoomCaptureProvider({ children }: { children: React.ReactNode }) {
   const [recording, setRecording] = React.useState(false);
+  const [stream, setStream] = React.useState<MediaStream | null>(null);
   const listenersRef = React.useRef<Set<ChunkListener>>(new Set());
 
   const emitChunk = React.useCallback((chunk: Blob) => {
@@ -51,8 +56,8 @@ export function RoomCaptureProvider({ children }: { children: React.ReactNode })
   }, []);
 
   const value = React.useMemo(
-    () => ({ recording, setRecording, emitChunk, subscribe }),
-    [recording, emitChunk, subscribe],
+    () => ({ recording, setRecording, stream, setStream, emitChunk, subscribe }),
+    [recording, stream, emitChunk, subscribe],
   );
 
   return <RoomCaptureContext.Provider value={value}>{children}</RoomCaptureContext.Provider>;
