@@ -79,6 +79,9 @@ export type HistoryPanelProps = {
   encounters: HPEncounterCard[];
   /** Polish #3 — series with ≥2 points each, newest-first. */
   labTrends?: HPLabTrend[];
+  /** D.7 (V, 10 Jun): render as a plain inline card (right rail) —
+   *  no fixed tab, no backdrop, no slide-over. */
+  inline?: boolean;
 };
 
 const LS_KEY = 'ph3.panel_open';
@@ -140,6 +143,40 @@ export function HistoryPanel(props: HistoryPanelProps) {
 
   // Until hydrated, render the rail closed to match SSR output.
   const isOpen = hydrated && open;
+
+  if (props.inline) {
+    // D.7 — history lives naked in the right rail: same content, no slider.
+    return (
+      <section className="rounded-xl border border-violet-200 bg-white">
+        <div className="flex items-baseline justify-between border-b border-violet-100 px-4 py-2.5">
+          <div>
+            <h2 className="text-sm font-bold text-even-navy-800">{props.patientName}</h2>
+            <a
+              href={`/patients/${props.patientId}`}
+              className="text-[10px] font-semibold uppercase tracking-wider text-violet-700 hover:underline"
+            >
+              View full history →
+            </a>
+          </div>
+          <button
+            type="button"
+            onClick={onRecompute}
+            disabled={recomputing}
+            className="rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+          >
+            {recomputing ? 'Computing…' : 'Recompute'}
+          </button>
+        </div>
+        <div className="max-h-[70vh] overflow-y-auto px-4 py-3">
+          <SummaryLine summary={props.summary} recomputing={recomputing} error={error} />
+          <Comorbidities patientId={props.patientId} />
+          <Allergies items={props.summary.allergies} />
+          {props.labTrends && props.labTrends.length > 0 && <LabTrends trends={props.labTrends} />}
+          <RecentEncounters encounters={props.encounters} />
+        </div>
+      </section>
+    );
+  }
 
   return (
     <>

@@ -13,7 +13,7 @@ import { getCurrentDoctor } from '@/lib/auth';
 import { EncounterEditor, type EncounterEditable } from '@/components/EncounterEditor';
 import { CdmssCard, type CdmssPayload, type CdmssItemRow } from '@/components/room/CdmssCard';
 
-import { AskTheChartRail } from '@/components/AskTheChartRail';
+import { AskTheChartSlider } from '@/components/AskTheChartSlider';
 import { EncounterTopBar } from '@/components/encounter/EncounterTopBar';
 import { PatientContextStrip } from '@/components/encounter/PatientContextStrip';
 import { EncounterLabResults } from '@/components/EncounterLabResults';
@@ -278,13 +278,9 @@ export default async function EncounterPage({
 
   return (
     <main className="min-h-screen bg-even-white-DEFAULT">
-      <HistoryPanel
-        patientId={row.patient_id}
-        patientName={row.patient_name}
-        summary={panelData.summary}
-        encounters={panelData.encounters}
-        labTrends={labTrends}
-      />
+      {/* D.7 — the places swap: Ask-the-Chart slides from the LEFT;
+          patient history lives naked in the right rail below. */}
+      <AskTheChartSlider encounterId={row.id} readOnly={row.status === 'completed'} />
       {/* v4.0.1 — new EncounterTopBar replaces the legacy header */}
       <EncounterTopBar
         encounterId={row.id}
@@ -428,12 +424,14 @@ export default async function EncounterPage({
         />
           </div>
           <div className="mt-6 lg:mt-0">
-            {/* v3.10.4 — Ask-the-chart right rail.
-                v4.0.8 — sticky/relative now lives inside the rail and is
-                toggled by a pin button persisted in localStorage. */}
-            <AskTheChartRail
-              encounterId={row.id}
-              readOnly={row.status === 'completed'}
+            {/* D.7 — patient history, always visible (was the left slider). */}
+            <HistoryPanel
+              inline
+              patientId={row.patient_id}
+              patientName={row.patient_name}
+              summary={panelData.summary}
+              encounters={panelData.encounters}
+              labTrends={labTrends}
             />
           </div>
         </div>
