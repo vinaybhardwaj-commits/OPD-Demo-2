@@ -20,7 +20,7 @@
  * ok:false and the caller records cdmss_error; never blocks 'ready'.
  */
 import { qwenJson, QwenError } from './qwen';
-import { kbRetrieve, type KbChunk } from './kb';
+import { kbHyDE, kbEmbed, kbVectorSearch, type KbChunk } from './kb';
 import type { OpdNote } from './note-generation';
 
 const DRAFT_MODEL = process.env.CDS_DRAFT_MODEL || 'qwen2.5:14b';
@@ -298,13 +298,13 @@ export async function runCdmssPipeline(
   if (!seed.trim()) return { ok: false, error: 'note_too_empty_for_seed', latency_ms: Date.now() - totalT0 };
   opts.onEvent?.('seed', `Seed question built (${seed.length} chars)`);
 
-  // 2+3. Retrieve (kbRetrieve = HyDE expand → embed → pgvector top-K)
-  let hits: KbChunk[] = [];
-  try {
-    hits = await kbRetrieve(seed, { topK });
-  } catch (e) {
-    return { ok: false, error: `kb_retrieve_failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 150)}`, latency_ms: Date.now() - totalT0 };
-  }
+  // 2+3. Retrieve — HyDE expand (soft) → embed → pgvector top-K. Steps are
+  // called individually so failures are ATTRIBUTABLE (a dropped LLM tunnel
+  // reads 'kb_embed_failed', not a misleading 'kb_no_hits').
+  const expanded = (await kbHyDE(seed)) ?? seed;
+  const vec = await kbEmbed(expanded === seed ? seed : `${seed}\n\n${expanded}`);
+  if (!vec) return { ok: false, error: 'kb_embed_failed (LLM tunnel?)', latency_ms: Date.now() - totalT0 };
+  const hits: KbChunk[] = await kbVectorSearch(vec, { topK });
   if (hits.length === 0) return { ok: false, error: 'kb_no_hits', latency_ms: Date.now() - totalT0 };
   opts.onEvent?.('retrieve', `${hits.length} KB excerpts (top: ${hits[0]?.book ?? '—'})`);
   const { numbered, sources } = formatSources(hits);
