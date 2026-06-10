@@ -27,7 +27,7 @@ const DRAFT_MODEL = process.env.CDS_DRAFT_MODEL || 'qwen2.5:14b';
 const CRITIQUE_MODEL = process.env.CDS_CRITIQUE_MODEL || 'llama3.1:8b';
 const REVISE_MODEL = process.env.CDS_REVISE_MODEL || 'qwen2.5:14b';
 const PROB_MODEL = process.env.CDS_PROB_MODEL || 'qwen2.5:14b';
-const DRAFT_TIMEOUT_MS = 180_000;
+const DRAFT_TIMEOUT_MS = 110_000; // Cloudflare tunnel 524s at ~100s — the draft must finish under that
 const CRITIQUE_TIMEOUT_MS = 45_000;
 const REVISE_TIMEOUT_MS = 90_000;
 const PROB_TIMEOUT_MS = 90_000;
@@ -302,7 +302,7 @@ function formatSources(hits: KbChunk[]): { numbered: string; sources: CdmssSourc
     section: h.section,
     page_start: h.page_start,
     page_end: h.page_end,
-    excerpt: (h.text || '').slice(0, 1200),
+    excerpt: (h.text || '').slice(0, 900),
     similarity: typeof h.similarity === 'number' ? Number(h.similarity.toFixed(4)) : 0,
   }));
   const numbered = sources
@@ -347,7 +347,7 @@ export async function runCdmssPipeline(
   opts: { topK?: number; onEvent?: (stage: string, msg: string, ms?: number) => void } = {},
 ): Promise<CdmssResult> {
   const totalT0 = Date.now();
-  const topK = opts.topK ?? 8;
+  const topK = opts.topK ?? 6; // smaller context → draft beats the ~100s tunnel ceiling
   const models: Array<{ model: string; latency_ms: number }> = [];
 
   // 1. Seed
